@@ -39,3 +39,14 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local data & runtime
+/data/
+/logs/
+/.next-pm2/
+
+# claude AI context (local dev tool)
+/.claude/
+
+# PM2 runtime
+ecosystem.config.js

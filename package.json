@@ -1,25 +1,45 @@
 {
-  "name": "hub-backend",
+  "name": "memo-assistant",
   "version": "0.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop memo-assistant",
+    "pm2:restart": "pm2 restart memo-assistant",
+    "pm2:status": "pm2 status",
+    "pm2:logs": "pm2 logs memo-assistant",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1021.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node-cron": "^3.0.11",
+    "better-sqlite3": "^12.6.2",
+    "discord.js": "^14.25.1",
     "next": "16.1.6",
+    "node-cron": "^4.2.1",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.0.1",
     "babel-plugin-react-compiler": "1.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
-    "typescript": "^5"
+    "jsdom": "^29.0.0",
+    "typescript": "^5",
+    "vitest": "^4.1.0"
   }
 }
