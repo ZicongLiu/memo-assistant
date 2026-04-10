@@ -2916,3 +2916,57 @@
 .pillLocked:hover {
   opacity: 0.85;
 }
+
+/* ─── Task creation form notes field ─────────────────────────────────────── */
+
+.addFormRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.addNotesToggle {
+  background: none;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.12s;
+  line-height: 1;
+}
+.addNotesToggle:hover { border-color: var(--accent); color: var(--accent); }
+.addNotesToggleActive {
+  border-color: var(--accent);
+  background: var(--accent-blue-dim);
+  color: var(--accent);
+}
+
+.addNotesField {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--surface-raised);
+  resize: vertical;
+  min-height: 52px;
+  line-height: 1.5;
+  margin-top: 4px;
+}
+.addNotesField:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+}
+
+.dailyNewTaskRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}

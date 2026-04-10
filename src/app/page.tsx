@@ -196,6 +196,8 @@ export default function Home() {
   const [filterProject, setFilterProject] = useState("all");
   const [filterDone, setFilterDone] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [newTaskNotes, setNewTaskNotes] = useState("");
+  const [newTaskNotesOpen, setNewTaskNotesOpen] = useState(false);
   const [newTaskPriority, setNewTaskPriority] = useState<"High" | "Medium" | "Low">("Medium");
   const [newTaskProject, setNewTaskProject] = useState("");
   // Import
@@ -358,6 +360,7 @@ export default function Home() {
   const [dailyDragOverId, setDailyDragOverId] = useState<string | null>(null);
   const [dailyDragOverPos, setDailyDragOverPos] = useState<"before" | "after">("after");
   const [dailyNewTitle, setDailyNewTitle] = useState("");
+  const [dailyNewNotes, setDailyNewNotes] = useState("");
   const [dailyNewPriority, setDailyNewPriority] = useState<"High" | "Medium" | "Low">("High");
   const [dailyShowNewForm, setDailyShowNewForm] = useState(false);
   // Subtask node inline editing
@@ -428,9 +431,24 @@ export default function Home() {
     });
   }, []);
 
+  // Save queue — ensures the LATEST state always wins even if persists overlap.
+  // Without this, two rapid persists (e.g. wrap-up then new board) can race;
+  // whichever API call finishes last wins and the other's changes are lost on refresh.
+  const pendingSave = useRef<HubState | null>(null);
+  const isSaving = useRef(false);
+
   const persist = useCallback(async (next: HubState) => {
-    setSaving(true); setState(next);
-    await saveStateApi(next);
+    setState(next);
+    setSaving(true);
+    pendingSave.current = next;
+    if (isSaving.current) return; // drain loop will pick up the latest
+    isSaving.current = true;
+    while (pendingSave.current) {
+      const toSave = pendingSave.current;
+      pendingSave.current = null;
+      await saveStateApi(toSave);
+    }
+    isSaving.current = false;
     setSaving(false);
   }, []);
 
@@ -465,10 +483,12 @@ export default function Home() {
       priority: newTaskPriority, category: "Other", done: false,
       createdAt: new Date().toISOString().slice(0, 10),
       projectId: newTaskProject || (state.projects?.[0]?.id ?? "p_default"),
-      subtasks: [], notes: "", eta: "", tagProjectIds: [], deps: [], recur: null,
+      subtasks: [], notes: newTaskNotes.trim(), eta: "", tagProjectIds: [], deps: [], recur: null,
     };
     persist({ ...state, tasks: [task, ...state.tasks] });
     setNewTaskTitle("");
+    setNewTaskNotes("");
+    setNewTaskNotesOpen(false);
   }
   function handleToggleDone(taskId: string) {
     if (!state) return;
@@ -955,9 +975,11 @@ export default function Home() {
     );
   }
 
-  // Auto-select defaults when setup screen opens for a fresh board (no existing board today)
+  // Auto-select defaults when setup screen opens for a genuinely new day (no board for todayStr).
+  // If today's board exists (even wrapped), we don't auto-populate — user is adding more.
   useEffect(() => {
-    if (!state || tab !== "today" || !!(state.dailyBoards?.find(b => b.date === todayStr)) || dailyAddingMore || dailyShowSetup) {
+    const hasBoard = !!(state?.dailyBoards?.find(b => b.date === todayStr));
+    if (!state || tab !== "today" || hasBoard || dailyAddingMore || dailyShowSetup) {
       setupAutoSelectDone.current = false;
       return;
     }
@@ -975,14 +997,17 @@ export default function Home() {
   function confirmDailySetup() {
     if (!state || dailySetupSelected.size === 0) return;
     const board = state.dailyBoards?.find(b => b.date === todayStr);
-    if (dailyAddingMore && board) {
+    if (board) {
+      // Always MERGE into the existing board for today — one board per day.
+      // Un-wrap it (it's active again) and add any newly selected tasks.
       const existing = new Set(board.taskIds);
       const added = [...dailySetupSelected].filter(id => !existing.has(id));
       const merged = sortedBoardTaskIds([...board.taskIds, ...added], state.tasks);
-      persist({ ...state, dailyBoards: (state.dailyBoards ?? []).map(b => b.date === todayStr ? { ...b, taskIds: merged } : b) });
+      persist({ ...state, dailyBoards: (state.dailyBoards ?? []).map(b => b.date === todayStr ? { ...b, taskIds: merged, wrapped: false } : b) });
     } else {
+      // Genuinely new day — create fresh board.
       const newBoard: DailyBoard = { date: todayStr, taskIds: sortedBoardTaskIds([...dailySetupSelected], state.tasks), wrapped: false };
-      persist({ ...state, dailyBoards: [...(state.dailyBoards ?? []).filter(b => b.date !== todayStr), newBoard] });
+      persist({ ...state, dailyBoards: [...(state.dailyBoards ?? []), newBoard] });
     }
     setDailyAddingMore(false);
     setDailyShowSetup(false);
@@ -1006,20 +1031,12 @@ export default function Home() {
       if (wrapCarryIds.has(t.id)) return { ...t, dailyRank: (t.dailyRank ?? 0) + 1 };
       return t;
     });
+    // Mark today's board wrapped — it stays as the single board for this date.
     const updatedBoards = (state.dailyBoards ?? []).map(b => b.date === todayStr ? { ...b, wrapped: true } : b);
     persist({ ...state, tasks: updatedTasks, dailyBoards: updatedBoards });
-    // Pre-select defaults for a fresh board: carried tasks + high priority, scoped to Memo project
-    const carriedIds = new Set([...wrapCarryIds]);
-    const memoId = state.projects.find(p => p.name === "Memo")?.id ?? null;
-    setDailySetupSelected(new Set(
-      updatedTasks.filter(t =>
-        !t.done
-        && (memoId ? t.projectId === memoId : true)
-        && (t.priority === "High" || carriedIds.has(t.id))
-      ).map(t => t.id)
-    ));
     setWrapMode(false);
-    setDailyShowSetup(true);
+    // Stay on the board view — user can add more tasks via "Add more" if needed.
+    // No automatic setup screen; setup only appears for a genuinely new day.
   }
 
   function toggleWrapId(setter: React.Dispatch<React.SetStateAction<Set<string>>>, id: string) {
@@ -1080,11 +1097,11 @@ export default function Home() {
       id, title: dailyNewTitle.trim(), priority: dailyNewPriority, category: "Other",
       done: false, createdAt: new Date().toISOString().slice(0, 10),
       projectId: memoProj?.id ?? newTaskProject ?? (state.projects?.[0]?.id ?? "p_default"),
-      subtasks: [], notes: "", eta: "", tagProjectIds: [], deps: [], recur: null,
+      subtasks: [], notes: dailyNewNotes.trim(), eta: "", tagProjectIds: [], deps: [], recur: null,
     };
     persist({ ...state, tasks: [task, ...state.tasks] });
     setDailySetupSelected(prev => new Set([...prev, id]));
-    setDailyNewTitle(""); setDailyShowNewForm(false);
+    setDailyNewTitle(""); setDailyNewNotes(""); setDailyShowNewForm(false);
   }
 
   function handleBoardQuickAdd(e: React.FormEvent) {
@@ -1620,17 +1637,32 @@ export default function Home() {
         {tab === "tasks" && (
           <>
             <form className={styles.addForm} onSubmit={handleAddTask}>
-              <input className={styles.input} placeholder="Add a task…" value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} />
-              <select className={styles.select} value={newTaskPriority} onChange={e => setNewTaskPriority(e.target.value as "High" | "Medium" | "Low")}>
-                <option>High</option><option>Medium</option><option>Low</option>
-              </select>
-              {projects.length > 0 && (
-                <select className={styles.select} value={newTaskProject} onChange={e => setNewTaskProject(e.target.value)}>
-                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              <div className={styles.addFormRow}>
+                <input className={styles.input} placeholder="Add a task…" value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} />
+                <select className={styles.select} value={newTaskPriority} onChange={e => setNewTaskPriority(e.target.value as "High" | "Medium" | "Low")}>
+                  <option>High</option><option>Medium</option><option>Low</option>
                 </select>
+                {projects.length > 0 && (
+                  <select className={styles.select} value={newTaskProject} onChange={e => setNewTaskProject(e.target.value)}>
+                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
+                <button type="button" className={`${styles.addNotesToggle} ${newTaskNotesOpen ? styles.addNotesToggleActive : ""}`}
+                  onClick={() => setNewTaskNotesOpen(o => !o)} title="Add notes">
+                  📝
+                </button>
+                <button className={styles.btn} type="submit">Add</button>
+                <button type="button" className={styles.btnOutline} onClick={() => { setImportOpen(o => !o); if (!importProject) setImportProject(newTaskProject); }}>Import</button>
+              </div>
+              {newTaskNotesOpen && (
+                <textarea
+                  className={styles.addNotesField}
+                  placeholder="Notes (optional)…"
+                  value={newTaskNotes}
+                  rows={2}
+                  onChange={e => setNewTaskNotes(e.target.value)}
+                />
               )}
-              <button className={styles.btn} type="submit">Add</button>
-              <button type="button" className={styles.btnOutline} onClick={() => { setImportOpen(o => !o); if (!importProject) setImportProject(newTaskProject); }}>Import</button>
             </form>
 
             {importOpen && (
@@ -1733,7 +1765,7 @@ export default function Home() {
               <div className={styles.dailySetup}>
                 <div className={styles.dailySetupHeader}>
                   <div>
-                    <h2 className={styles.dailySetupTitle}>{dailyAddingMore ? "Add More Tasks" : dailyShowSetup ? "Start New Board" : "Start Today's Board"}</h2>
+                    <h2 className={styles.dailySetupTitle}>{todayBoard ? "Add Tasks to Today" : "Start Today's Board"}</h2>
                     <p className={styles.dailySetupDate}>{todayStr}</p>
                   </div>
                   {(dailyAddingMore || dailyShowSetup) && <button className={styles.subtaskCancelBtn} onClick={() => { setDailyAddingMore(false); setDailyShowSetup(false); }}>Cancel</button>}
@@ -1807,14 +1839,23 @@ export default function Home() {
                   {/* New task form */}
                   {dailyShowNewForm ? (
                     <form className={styles.dailyNewTaskForm} onSubmit={handleDailyNewTask}>
-                      <input className={styles.input} placeholder="New task title…" value={dailyNewTitle} autoFocus
-                        onChange={e => setDailyNewTitle(e.target.value)}
-                        onKeyDown={e => e.key === "Escape" && setDailyShowNewForm(false)} />
-                      <select className={styles.select} value={dailyNewPriority} onChange={e => setDailyNewPriority(e.target.value as "High" | "Medium" | "Low")}>
-                        <option>High</option><option>Medium</option><option>Low</option>
-                      </select>
-                      <button className={styles.btn} type="submit">Add</button>
-                      <button type="button" className={styles.subtaskCancelBtn} onClick={() => setDailyShowNewForm(false)}>Cancel</button>
+                      <div className={styles.dailyNewTaskRow}>
+                        <input className={styles.input} placeholder="New task title…" value={dailyNewTitle} autoFocus
+                          onChange={e => setDailyNewTitle(e.target.value)}
+                          onKeyDown={e => e.key === "Escape" && setDailyShowNewForm(false)} />
+                        <select className={styles.select} value={dailyNewPriority} onChange={e => setDailyNewPriority(e.target.value as "High" | "Medium" | "Low")}>
+                          <option>High</option><option>Medium</option><option>Low</option>
+                        </select>
+                        <button className={styles.btn} type="submit">Add</button>
+                        <button type="button" className={styles.subtaskCancelBtn} onClick={() => { setDailyShowNewForm(false); setDailyNewNotes(""); }}>Cancel</button>
+                      </div>
+                      <textarea
+                        className={styles.addNotesField}
+                        placeholder="Notes (optional)…"
+                        value={dailyNewNotes}
+                        rows={2}
+                        onChange={e => setDailyNewNotes(e.target.value)}
+                      />
                     </form>
                   ) : (
                     <button className={styles.dailyNewTaskBtn} onClick={() => setDailyShowNewForm(true)}>+ Create new task</button>
@@ -1822,7 +1863,7 @@ export default function Home() {
                 </div>
                 <div className={styles.dailySetupFooter}>
                   <button className={styles.btn} disabled={dailySetupSelected.size === 0} onClick={confirmDailySetup}>
-                    {dailyAddingMore ? `Add ${dailySetupSelected.size} tasks` : `Start Board · ${dailySetupSelected.size} tasks`}
+                    {todayBoard ? `Add ${dailySetupSelected.size} tasks` : `Start Board · ${dailySetupSelected.size} tasks`}
                   </button>
                 </div>
               </div>
@@ -1834,20 +1875,19 @@ export default function Home() {
                     <span className={styles.dailyBoardMeta}>{todayStr} · {boardTaskObjects.filter(t => t.done).length}/{boardTaskObjects.length} done</span>
                   </div>
                   <div className={styles.dailyBoardHeaderActions}>
-                    {todayBoard.wrapped ? (
-                      <button className={styles.btn} onClick={() => {
-                        setDailySetupSelected(getDefaultBoardSelection(state.tasks, state.dailyBoards ?? [], state.projects));
-                        setDailyShowSetup(true);
-                      }}>Start New Board</button>
-                    ) : (
-                      <>
-                        <button className={styles.btnOutline} onClick={startAddMore}>+ Add tasks</button>
-                        <button className={styles.dailyWrapBtn} onClick={openWrapUp}>Wrap Up Day</button>
-                      </>
+                    <button className={styles.btnOutline} onClick={startAddMore}>+ Add tasks</button>
+                    {!todayBoard.wrapped && (
+                      <button className={styles.dailyWrapBtn} onClick={openWrapUp}>Wrap Up Day</button>
+                    )}
+                    {todayBoard.wrapped && (
+                      <button className={styles.btnOutline} onClick={() => {
+                        // Un-wrap today's board — user wants to continue working on it
+                        persist({ ...state, dailyBoards: (state.dailyBoards ?? []).map(b => b.date === todayStr ? { ...b, wrapped: false } : b) });
+                      }}>↩ Re-open</button>
                     )}
                   </div>
                 </div>
-                {todayBoard.wrapped && <div className={styles.dailyWrapNote}>✅ Day wrapped — incomplete tasks boosted for tomorrow.</div>}
+                {todayBoard.wrapped && <div className={styles.dailyWrapNote}>✅ Wrapped — incomplete tasks boosted. Add more tasks or re-open to keep working.</div>}
 
                 {/* ── Wrap-up panel ── */}
                 {wrapMode && (() => {
