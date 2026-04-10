@@ -2970,3 +2970,27 @@
   align-items: center;
   flex-wrap: wrap;
 }
+
+/* ─── Archived task row ──────────────────────────────────────────────────── */
+
+.taskArchived {
+  opacity: 0.65;
+  background: var(--surface-raised);
+  border-left: 3px solid var(--text-muted) !important;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.taskArchived .taskMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.taskArchived .taskActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}

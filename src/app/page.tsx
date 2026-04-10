@@ -19,6 +19,7 @@ interface Task {
   priority: "High" | "Medium" | "Low";
   category: string;
   done: boolean;
+  archived?: boolean;
   createdAt: string;
   projectId: string;
   subtasks: SubtaskNode[];
@@ -195,6 +196,7 @@ export default function Home() {
   const [tab, setTab] = useState<"tasks" | "today" | "boards" | "topics" | "settings">("tasks");
   const [filterProject, setFilterProject] = useState("all");
   const [filterDone, setFilterDone] = useState(false);
+  const [filterArchived, setFilterArchived] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskNotes, setNewTaskNotes] = useState("");
   const [newTaskNotesOpen, setNewTaskNotesOpen] = useState(false);
@@ -515,7 +517,20 @@ export default function Home() {
   }
   function handleDeleteTask(taskId: string) {
     if (!state) return;
-    persist({ ...state, tasks: state.tasks.filter(t => t.id !== taskId) });
+    // Soft-delete: archive the task (and its children). Recoverable from the Archived view.
+    persist({ ...state, tasks: state.tasks.map(t =>
+      t.id === taskId || t.parentTaskId === taskId ? { ...t, archived: true } : t
+    )});
+  }
+  function handleRestoreTask(taskId: string) {
+    if (!state) return;
+    persist({ ...state, tasks: state.tasks.map(t =>
+      t.id === taskId || t.parentTaskId === taskId ? { ...t, archived: false } : t
+    )});
+  }
+  function handlePermanentDeleteTask(taskId: string) {
+    if (!state) return;
+    persist({ ...state, tasks: state.tasks.filter(t => t.id !== taskId && t.parentTaskId !== taskId) });
   }
 
   // ── Task DnD ─────────────────────────────────────────────────────────────────
@@ -1295,15 +1310,19 @@ export default function Home() {
     return !!(proj?.private && !unlockedProjects.has(projectId));
   };
 
-  // Top-level = no parentTaskId, exclude tasks from locked private projects
-  const topLevelTasks = state.tasks.filter(t => !t.parentTaskId && !isProjectLocked(t.projectId));
+  // Top-level = no parentTaskId, exclude archived and locked private project tasks
+  const topLevelTasks = state.tasks.filter(t => !t.parentTaskId && !t.archived && !isProjectLocked(t.projectId));
   const taskSearchLower = taskSearch.toLowerCase();
   const tasks = topLevelTasks
     .filter(t => filterDone ? t.done : !t.done)
     .filter(t => filterProject === "all" || t.projectId === filterProject)
     .filter(t => !taskSearch || t.title.toLowerCase().includes(taskSearchLower) || (t.notes ?? "").toLowerCase().includes(taskSearchLower));
 
-  const activeTasks = state.tasks.filter(t => !t.done && !isProjectLocked(t.projectId));
+  const activeTasks = state.tasks.filter(t => !t.done && !t.archived && !isProjectLocked(t.projectId));
+
+  // Archived tasks (for the recoverable trash view)
+  const archivedTasks = state.tasks.filter(t => !!t.archived && !t.parentTaskId
+    && (filterProject === "all" || t.projectId === filterProject));
 
   // ── Task card content (shared by top-level and child tasks) ──────────────────
 
@@ -1505,7 +1524,7 @@ export default function Home() {
   const todayBoard = state.dailyBoards?.find(b => b.date === todayStr) ?? null;
   const boardTaskObjects = (todayBoard?.taskIds ?? [])
     .map(id => state.tasks.find(t => t.id === id))
-    .filter((t): t is Task => !!t && !isProjectLocked(t.projectId));
+    .filter((t): t is Task => !!t && !t.archived && !isProjectLocked(t.projectId));
   // Build hierarchical setup task list: parents with their children nested
   const memoProject = projects.find(p => p.name === "Memo");
   // Resolve which project ID to use for the setup filter
@@ -1514,7 +1533,7 @@ export default function Home() {
     if (dailySetupProjectId === "all") return null;
     return dailySetupProjectId;
   })();
-  const allIncompleteTasks = state.tasks.filter(t => !t.done && (!setupProjectId || t.projectId === setupProjectId));
+  const allIncompleteTasks = state.tasks.filter(t => !t.done && !t.archived && (!setupProjectId || t.projectId === setupProjectId));
   const setupParents = allIncompleteTasks.filter(t => !t.parentTaskId);
   const setupChildMap = new Map<string, Task[]>();
   for (const t of allIncompleteTasks) {
@@ -1711,7 +1730,10 @@ export default function Home() {
                 })}
               </div>
               <label className={styles.filterToggle}>
-                <input type="checkbox" checked={filterDone} onChange={e => setFilterDone(e.target.checked)} /> Completed
+                <input type="checkbox" checked={filterDone} onChange={e => { setFilterDone(e.target.checked); if (e.target.checked) setFilterArchived(false); }} /> Completed
+              </label>
+              <label className={styles.filterToggle}>
+                <input type="checkbox" checked={filterArchived} onChange={e => { setFilterArchived(e.target.checked); if (e.target.checked) setFilterDone(false); }} /> Archived
               </label>
             </div>
             <div className={styles.searchBar}>
@@ -1725,7 +1747,36 @@ export default function Home() {
               {taskSearch && <button className={styles.searchClear} onClick={() => setTaskSearch("")}>✕</button>}
             </div>
 
-            {tasks.length === 0 ? (
+            {filterArchived ? (
+              /* ── Archived tasks view ── */
+              archivedTasks.length === 0 ? (
+                <p className={styles.empty}>No archived tasks.</p>
+              ) : (
+                <ul className={styles.taskList}>
+                  {archivedTasks.map(task => {
+                    const proj = state.projects.find(p => p.id === task.projectId);
+                    return (
+                      <li key={task.id} className={styles.taskLi}>
+                        <div className={`${styles.taskItem} ${styles.taskArchived}`}>
+                          <div className={styles.taskMain}>
+                            <div className={styles.taskTitleRow}>
+                              <span className={styles.taskTitle}>{task.title}</span>
+                              {proj && <span className={styles.project}>{proj.name}</span>}
+                              <span className={`${styles.priorityBadge} ${task.priority === "High" ? styles.prioHigh : task.priority === "Medium" ? styles.prioMedium : styles.prioLow}`}>{task.priority}</span>
+                            </div>
+                            {task.notes && <div className={styles.taskNotesPreview}>{task.notes.split("\n")[0]}</div>}
+                          </div>
+                          <div className={styles.taskActions}>
+                            <button className={styles.btnSmall} onClick={() => handleRestoreTask(task.id)} title="Restore task">↩ Restore</button>
+                            <button className={styles.deleteBtn} onClick={() => handlePermanentDeleteTask(task.id)} title="Delete permanently">🗑</button>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )
+            ) : tasks.length === 0 ? (
               <p className={styles.empty}>{filterDone ? "No completed tasks." : "All clear!"}</p>
             ) : (
               <ul className={styles.taskList} onDragEnd={handleDragEnd}>
