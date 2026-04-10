@@ -50,7 +50,15 @@ interface ProjectBoard {
   wrappedAt?: string;
 }
 
-interface Project { id: string; name: string; notifyDiscord: boolean; }
+interface Project {
+  id: string;
+  name: string;
+  notifyDiscord: boolean;
+  private?: boolean;          // password-locked project
+  passwordHash?: string;      // PBKDF2-SHA256 hex
+  passwordSalt?: string;      // 16-byte random hex
+  recoveryEmail?: string;     // email for forgot-password OTP
+}
 interface LearningTopic { id: string; name: string; addedAt: string; trackWeekly: boolean; lastSeenIds: string[]; }
 interface BotJob {
   id: string;
@@ -145,6 +153,23 @@ async function saveStateApi(state: HubState) {
   });
 }
 
+// ─── Crypto helpers for project password locking ─────────────────────────────
+
+function generateSalt(): string {
+  return Array.from(crypto.getRandomValues(new Uint8Array(16)))
+    .map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function hashPassword(password: string, salt: string): Promise<string> {
+  const enc = new TextEncoder();
+  const keyMat = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: enc.encode(salt), iterations: 100000, hash: "SHA-256" },
+    keyMat, 256
+  );
+  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
 // ─── Board sort helpers (module-level so initial load can use them) ───────────
 
 const BOARD_PRIO = { High: 3, Medium: 2, Low: 1 } as Record<string, number>;
@@ -234,9 +259,11 @@ export default function Home() {
   const [subDropTarget, setSubDropTarget] = useState<{ nodeId: string; taskId: string; position: "before" | "after" | "child" } | null>(null);
 
   // Responsive layout detection
-  const [isMobile, setIsMobile] = useState(false);
+  const [isMobileAuto, setIsMobileAuto] = useState(false);
+  const [isMobileOverride, setIsMobileOverride] = useState<boolean | null>(null); // null = follow auto
+  const isMobile = isMobileOverride !== null ? isMobileOverride : isMobileAuto;
   useEffect(() => {
-    const check = () => setIsMobile(window.innerWidth < 640);
+    const check = () => setIsMobileAuto(window.innerWidth < 640);
     check();
     window.addEventListener("resize", check);
     return () => window.removeEventListener("resize", check);
@@ -258,6 +285,24 @@ export default function Home() {
     { id: "warm",   label: "Warm",   swatch: "#d97706" },
     { id: "violet", label: "Violet", swatch: "#7c3aed" },
   ];
+
+  // Private project lock / unlock
+  const [unlockedProjects, setUnlockedProjects] = useState<Set<string>>(new Set());
+  const [lockDialog, setLockDialog] = useState<{
+    projectId: string;
+    mode: "unlock" | "setPassword" | "changePassword" | "forgot" | "verifyOtp";
+  } | null>(null);
+  const [lockPassword, setLockPassword] = useState("");
+  const [lockPasswordConfirm, setLockPasswordConfirm] = useState("");
+  const [lockError, setLockError] = useState("");
+  const [lockOtp, setLockOtp] = useState("");
+  const [lockRecoveryEmail, setLockRecoveryEmail] = useState("");
+  const [lockOtpLoading, setLockOtpLoading] = useState(false);
+
+  // Backup / Restore
+  const [restorePreview, setRestorePreview] = useState<HubState | null>(null);
+  const [restoreFileName, setRestoreFileName] = useState("");
+  const restoreInputRef = useRef<HTMLInputElement>(null);
 
   // Settings / Jobs
   const [jobs, setJobs] = useState<BotJob[]>(DEFAULT_JOBS);
@@ -577,6 +622,145 @@ export default function Home() {
   function handleDeleteTopic(id: string) {
     if (!state) return;
     persist({ ...state, learningTopics: (state.learningTopics ?? []).filter(t => t.id !== id) });
+  }
+
+  // ── Private project lock / unlock ────────────────────────────────────────────
+
+  function openLockDialog(projectId: string, mode: "unlock" | "setPassword" | "changePassword" | "forgot" | "verifyOtp") {
+    setLockDialog({ projectId, mode });
+    setLockPassword(""); setLockPasswordConfirm(""); setLockError(""); setLockOtp(""); setLockOtpLoading(false);
+    const proj = state?.projects.find(p => p.id === projectId);
+    setLockRecoveryEmail(proj?.recoveryEmail ?? "");
+  }
+
+  async function handleSetProjectPassword() {
+    if (!state || !lockDialog) return;
+    if (lockPassword.length < 4) { setLockError("Password must be at least 4 characters."); return; }
+    if (lockPassword !== lockPasswordConfirm) { setLockError("Passwords don't match."); return; }
+    const salt = generateSalt();
+    const hash = await hashPassword(lockPassword, salt);
+    const updated = state.projects.map(p =>
+      p.id === lockDialog.projectId
+        ? { ...p, private: true, passwordHash: hash, passwordSalt: salt, recoveryEmail: lockRecoveryEmail || p.recoveryEmail }
+        : p
+    );
+    await persist({ ...state, projects: updated });
+    setUnlockedProjects(prev => { const n = new Set(prev); n.add(lockDialog.projectId); return n; });
+    setLockDialog(null);
+  }
+
+  async function handleUnlockProject() {
+    if (!state || !lockDialog) return;
+    const proj = state.projects.find(p => p.id === lockDialog.projectId);
+    if (!proj?.passwordHash || !proj?.passwordSalt) { setLockError("No password set."); return; }
+    const hash = await hashPassword(lockPassword, proj.passwordSalt);
+    if (hash !== proj.passwordHash) { setLockError("Incorrect password."); return; }
+    setUnlockedProjects(prev => { const n = new Set(prev); n.add(lockDialog.projectId); return n; });
+    setLockDialog(null);
+  }
+
+  function handleLockProject(projectId: string) {
+    setUnlockedProjects(prev => { const n = new Set(prev); n.delete(projectId); return n; });
+  }
+
+  async function handleRemoveProjectPassword() {
+    if (!state || !lockDialog) return;
+    const updated = state.projects.map(p =>
+      p.id === lockDialog.projectId
+        ? { ...p, private: false, passwordHash: undefined, passwordSalt: undefined }
+        : p
+    );
+    await persist({ ...state, projects: updated });
+    setUnlockedProjects(prev => { const n = new Set(prev); n.delete(lockDialog.projectId); return n; });
+    setLockDialog(null);
+  }
+
+  async function handleSendOtp() {
+    if (!state || !lockDialog) return;
+    const proj = state.projects.find(p => p.id === lockDialog.projectId);
+    const email = lockRecoveryEmail || proj?.recoveryEmail;
+    if (!email) { setLockError("No recovery email set for this project."); return; }
+    setLockOtpLoading(true); setLockError("");
+    try {
+      const res = await fetch("/api/auth-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "send", projectId: lockDialog.projectId, email }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setLockDialog({ ...lockDialog, mode: "verifyOtp" });
+      setLockRecoveryEmail(email);
+    } catch (e) {
+      setLockError("Failed to send code: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setLockOtpLoading(false);
+    }
+  }
+
+  async function handleVerifyOtp() {
+    if (!state || !lockDialog) return;
+    if (lockPassword.length < 4) { setLockError("New password must be at least 4 characters."); return; }
+    if (lockPassword !== lockPasswordConfirm) { setLockError("Passwords don't match."); return; }
+    setLockOtpLoading(true); setLockError("");
+    try {
+      const res = await fetch("/api/auth-reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "verify", projectId: lockDialog.projectId, otp: lockOtp }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const salt = generateSalt();
+      const hash = await hashPassword(lockPassword, salt);
+      const updated = state.projects.map(p =>
+        p.id === lockDialog.projectId ? { ...p, passwordHash: hash, passwordSalt: salt } : p
+      );
+      await persist({ ...state, projects: updated });
+      setUnlockedProjects(prev => { const n = new Set(prev); n.add(lockDialog.projectId!); return n; });
+      setLockDialog(null);
+    } catch (e) {
+      setLockError("Invalid or expired code.");
+    } finally {
+      setLockOtpLoading(false);
+    }
+  }
+
+  // ── Backup / Restore ─────────────────────────────────────────────────────────
+
+  function handleExport() {
+    if (!state) return;
+    const json = JSON.stringify(state, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `flowdesk-backup-${todayStr}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleRestoreFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = evt => {
+      try {
+        const parsed = JSON.parse(evt.target?.result as string) as HubState;
+        if (!Array.isArray(parsed.tasks) || !Array.isArray(parsed.projects)) throw new Error("Invalid");
+        setRestorePreview(parsed);
+        setRestoreFileName(file.name);
+      } catch {
+        alert("Invalid backup file — please choose a valid FlowDesk JSON backup.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  async function confirmRestore() {
+    if (!restorePreview) return;
+    await persist(restorePreview);
+    setRestorePreview(null);
+    setRestoreFileName("");
   }
 
   // ── Settings / Jobs ──────────────────────────────────────────────────────────
@@ -1050,15 +1234,21 @@ export default function Home() {
     }
   }
 
-  // Top-level = no parentTaskId
-  const topLevelTasks = state.tasks.filter(t => !t.parentTaskId);
+  // Private project helper — is a project locked?
+  const isProjectLocked = (projectId: string) => {
+    const proj = state.projects.find(p => p.id === projectId);
+    return !!(proj?.private && !unlockedProjects.has(projectId));
+  };
+
+  // Top-level = no parentTaskId, exclude tasks from locked private projects
+  const topLevelTasks = state.tasks.filter(t => !t.parentTaskId && !isProjectLocked(t.projectId));
   const taskSearchLower = taskSearch.toLowerCase();
   const tasks = topLevelTasks
     .filter(t => filterDone ? t.done : !t.done)
     .filter(t => filterProject === "all" || t.projectId === filterProject)
     .filter(t => !taskSearch || t.title.toLowerCase().includes(taskSearchLower) || (t.notes ?? "").toLowerCase().includes(taskSearchLower));
 
-  const activeTasks = state.tasks.filter(t => !t.done);
+  const activeTasks = state.tasks.filter(t => !t.done && !isProjectLocked(t.projectId));
 
   // ── Task card content (shared by top-level and child tasks) ──────────────────
 
@@ -1259,7 +1449,8 @@ export default function Home() {
   const projects = state.projects ?? [];
   const todayBoard = state.dailyBoards?.find(b => b.date === todayStr) ?? null;
   const boardTaskObjects = (todayBoard?.taskIds ?? [])
-    .map(id => state.tasks.find(t => t.id === id)).filter((t): t is Task => !!t);
+    .map(id => state.tasks.find(t => t.id === id))
+    .filter((t): t is Task => !!t && !isProjectLocked(t.projectId));
   // Build hierarchical setup task list: parents with their children nested
   const memoProject = projects.find(p => p.name === "Memo");
   // Resolve which project ID to use for the setup filter
@@ -2146,15 +2337,82 @@ export default function Home() {
                 <button className={styles.btn} type="submit">Add Project</button>
               </form>
               <ul className={styles.projectList}>
-                {projects.map((p, i) => (
-                  <li key={p.id} className={styles.projectListItem}>
-                    <span className={styles.projectDot} style={{ background: PROJECT_COLORS[i % PROJECT_COLORS.length] }} />
-                    <span className={styles.projectListName}>{p.name}</span>
-                    <span className={styles.projectListCount}>{state.tasks.filter(t => t.projectId === p.id).length} tasks</span>
-                    <button className={styles.deleteBtn} onClick={() => handleDeleteProject(p.id)} title="Delete project">×</button>
-                  </li>
-                ))}
+                {projects.map((p, i) => {
+                  const isLocked = !!(p.private && !unlockedProjects.has(p.id));
+                  const isPrivate = !!p.private;
+                  return (
+                    <li key={p.id} className={`${styles.projectListItem} ${isPrivate ? styles.projectListPrivate : ""}`}>
+                      <span className={styles.projectDot} style={{ background: PROJECT_COLORS[i % PROJECT_COLORS.length] }} />
+                      <span className={styles.projectListName}>
+                        {isPrivate && <span className={styles.projectLockIcon}>{isLocked ? "🔒" : "🔓"}</span>}
+                        {p.name}
+                      </span>
+                      <span className={styles.projectListCount}>{state.tasks.filter(t => t.projectId === p.id).length} tasks</span>
+                      {/* Lock controls */}
+                      {isPrivate && isLocked && (
+                        <button className={styles.btnSmall} onClick={() => openLockDialog(p.id, "unlock")} title="Unlock project">Unlock</button>
+                      )}
+                      {isPrivate && !isLocked && (
+                        <>
+                          <button className={styles.btnSmall} onClick={() => handleLockProject(p.id)} title="Lock project">Lock</button>
+                          <button className={styles.btnSmall} onClick={() => openLockDialog(p.id, "changePassword")} title="Change password">Password</button>
+                        </>
+                      )}
+                      {!isPrivate && (
+                        <button className={styles.btnSmall} onClick={() => openLockDialog(p.id, "setPassword")} title="Add password lock">+ Lock</button>
+                      )}
+                      <button className={styles.deleteBtn} onClick={() => handleDeleteProject(p.id)} title="Delete project">×</button>
+                    </li>
+                  );
+                })}
               </ul>
+            </section>
+
+            {/* ── Data Backup & Restore ── */}
+            <section className={styles.settingsSection}>
+              <div className={styles.settingsSectionHeader}>
+                <div>
+                  <h2 className={styles.settingsSectionTitle}>💾 Data Backup & Restore</h2>
+                  <p className={styles.settingsNote}>Export all your data as a JSON file you can save locally. Restore from any previous backup — this replaces all current data.</p>
+                </div>
+              </div>
+              <div className={styles.backupRow}>
+                <div className={styles.backupCard}>
+                  <div className={styles.backupCardTitle}>⬇ Backup</div>
+                  <p className={styles.backupCardDesc}>
+                    Download a full snapshot of your workspace.
+                    {state && <> Includes <strong>{state.tasks.length}</strong> tasks, <strong>{state.projects.length}</strong> projects, <strong>{state.dailyBoards?.length ?? 0}</strong> daily boards, <strong>{state.learningTopics?.length ?? 0}</strong> topics.</>}
+                  </p>
+                  <button className={styles.btn} onClick={handleExport}>Download backup JSON</button>
+                </div>
+                <div className={styles.backupCard}>
+                  <div className={styles.backupCardTitle}>⬆ Restore</div>
+                  <p className={styles.backupCardDesc}>Upload a FlowDesk backup JSON file. You'll be asked to confirm before anything is replaced.</p>
+                  <input ref={restoreInputRef} type="file" accept=".json" style={{ display: "none" }} onChange={handleRestoreFileChange} />
+                  <button className={styles.btnOutline} onClick={() => restoreInputRef.current?.click()}>Choose backup file…</button>
+                </div>
+              </div>
+              {restorePreview && (
+                <div className={styles.restoreConfirm}>
+                  <div className={styles.restoreConfirmInfo}>
+                    <span className={styles.restoreConfirmIcon}>⚠️</span>
+                    <div>
+                      <strong>Restore from &quot;{restoreFileName}&quot;?</strong>
+                      <div className={styles.restoreConfirmDetails}>
+                        This backup contains <strong>{restorePreview.tasks?.length ?? 0}</strong> tasks,{" "}
+                        <strong>{restorePreview.projects?.length ?? 0}</strong> projects,{" "}
+                        <strong>{restorePreview.dailyBoards?.length ?? 0}</strong> daily boards, and{" "}
+                        <strong>{restorePreview.learningTopics?.length ?? 0}</strong> topics.
+                        Your current data will be completely replaced.
+                      </div>
+                    </div>
+                  </div>
+                  <div className={styles.restoreConfirmActions}>
+                    <button className={`${styles.btn} ${styles.btnDanger}`} onClick={confirmRestore}>Yes, restore now</button>
+                    <button className={styles.subtaskCancelBtn} onClick={() => { setRestorePreview(null); setRestoreFileName(""); }}>Cancel</button>
+                  </div>
+                </div>
+              )}
             </section>
 
             {/* ── Development Checklist ── */}
@@ -2227,6 +2485,135 @@ export default function Home() {
           </nav>
         )}
       </div>
+
+      {/* ── Mobile / Web view toggle ── */}
+      <div className={styles.viewToggle}>
+        <button
+          className={`${styles.viewToggleBtn} ${isMobile ? styles.viewToggleBtnActive : ""}`}
+          onClick={() => setIsMobileOverride(true)}
+          title="Mobile layout"
+        >📱 Mobile</button>
+        <button
+          className={`${styles.viewToggleBtn} ${!isMobile ? styles.viewToggleBtnActive : ""}`}
+          onClick={() => setIsMobileOverride(false)}
+          title="Web layout"
+        >🖥 Web</button>
+      </div>
+
+      {/* ── Lock Dialog Modal ── */}
+      {lockDialog && (() => {
+        const proj = state?.projects.find(p => p.id === lockDialog.projectId);
+        const mode = lockDialog.mode;
+        return (
+          <div className={styles.lockOverlay} onClick={() => setLockDialog(null)}>
+            <div className={styles.lockModal} onClick={e => e.stopPropagation()}>
+              <div className={styles.lockModalHeader}>
+                <span className={styles.lockModalIcon}>
+                  {mode === "unlock" ? "🔓" : mode === "forgot" || mode === "verifyOtp" ? "📧" : "🔒"}
+                </span>
+                <div>
+                  <h3 className={styles.lockModalTitle}>
+                    {mode === "unlock" && `Unlock "${proj?.name}"`}
+                    {mode === "setPassword" && `Lock "${proj?.name}"`}
+                    {mode === "changePassword" && `Change password — "${proj?.name}"`}
+                    {mode === "forgot" && `Forgot password — "${proj?.name}"`}
+                    {mode === "verifyOtp" && "Enter verification code"}
+                  </h3>
+                  {mode === "setPassword" && <p className={styles.lockModalSub}>Create a password to hide this project&apos;s tasks until unlocked.</p>}
+                  {mode === "unlock" && <p className={styles.lockModalSub}>Enter your password to access this project.</p>}
+                </div>
+                <button className={styles.lockModalClose} onClick={() => setLockDialog(null)}>×</button>
+              </div>
+
+              {/* Unlock */}
+              {mode === "unlock" && (
+                <div className={styles.lockModalBody}>
+                  <input className={styles.input} type="password" placeholder="Password" autoFocus
+                    value={lockPassword} onChange={e => { setLockPassword(e.target.value); setLockError(""); }}
+                    onKeyDown={e => e.key === "Enter" && handleUnlockProject()} />
+                  {lockError && <div className={styles.lockError}>{lockError}</div>}
+                  <div className={styles.lockModalActions}>
+                    <button className={styles.btn} onClick={handleUnlockProject}>Unlock</button>
+                    <button className={styles.linkBtn} onClick={() => setLockDialog({ ...lockDialog, mode: "forgot" })}>Forgot password?</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Set / Change password */}
+              {(mode === "setPassword" || mode === "changePassword") && (
+                <div className={styles.lockModalBody}>
+                  <label className={styles.lockLabel}>New password</label>
+                  <input className={styles.input} type="password" placeholder="At least 4 characters" autoFocus
+                    value={lockPassword} onChange={e => { setLockPassword(e.target.value); setLockError(""); }} />
+                  <label className={styles.lockLabel}>Confirm password</label>
+                  <input className={styles.input} type="password" placeholder="Repeat password"
+                    value={lockPasswordConfirm} onChange={e => { setLockPasswordConfirm(e.target.value); setLockError(""); }}
+                    onKeyDown={e => e.key === "Enter" && handleSetProjectPassword()} />
+                  <label className={styles.lockLabel}>Recovery email <span className={styles.lockLabelOptional}>(optional — for forgot password)</span></label>
+                  <input className={styles.input} type="email" placeholder="you@example.com"
+                    value={lockRecoveryEmail} onChange={e => setLockRecoveryEmail(e.target.value)} />
+                  {lockError && <div className={styles.lockError}>{lockError}</div>}
+                  <div className={styles.lockModalActions}>
+                    <button className={styles.btn} onClick={handleSetProjectPassword}>
+                      {mode === "setPassword" ? "Lock project" : "Update password"}
+                    </button>
+                    {mode === "changePassword" && (
+                      <button className={styles.btnOutline} onClick={handleRemoveProjectPassword}>Remove lock</button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Forgot password — enter email & send OTP */}
+              {mode === "forgot" && (
+                <div className={styles.lockModalBody}>
+                  <p className={styles.lockModalSub}>We&apos;ll send a 6-digit code to your recovery email so you can reset the password.</p>
+                  {proj?.recoveryEmail && (
+                    <div className={styles.lockRecoveryHint}>Recovery email on file: <strong>{proj.recoveryEmail}</strong></div>
+                  )}
+                  {!proj?.recoveryEmail && (
+                    <>
+                      <label className={styles.lockLabel}>Recovery email</label>
+                      <input className={styles.input} type="email" placeholder="you@example.com" autoFocus
+                        value={lockRecoveryEmail} onChange={e => { setLockRecoveryEmail(e.target.value); setLockError(""); }} />
+                    </>
+                  )}
+                  {lockError && <div className={styles.lockError}>{lockError}</div>}
+                  <div className={styles.lockModalActions}>
+                    <button className={styles.btn} onClick={handleSendOtp} disabled={lockOtpLoading}>
+                      {lockOtpLoading ? "Sending…" : "Send code"}
+                    </button>
+                    <button className={styles.linkBtn} onClick={() => setLockDialog({ ...lockDialog, mode: "unlock" })}>← Back</button>
+                  </div>
+                </div>
+              )}
+
+              {/* Verify OTP + set new password */}
+              {mode === "verifyOtp" && (
+                <div className={styles.lockModalBody}>
+                  <p className={styles.lockModalSub}>Enter the 6-digit code sent to <strong>{lockRecoveryEmail}</strong> and set a new password.</p>
+                  <label className={styles.lockLabel}>Verification code</label>
+                  <input className={styles.input} type="text" placeholder="123456" autoFocus maxLength={6}
+                    value={lockOtp} onChange={e => { setLockOtp(e.target.value.replace(/\D/g, "")); setLockError(""); }} />
+                  <label className={styles.lockLabel}>New password</label>
+                  <input className={styles.input} type="password" placeholder="At least 4 characters"
+                    value={lockPassword} onChange={e => { setLockPassword(e.target.value); setLockError(""); }} />
+                  <label className={styles.lockLabel}>Confirm password</label>
+                  <input className={styles.input} type="password" placeholder="Repeat password"
+                    value={lockPasswordConfirm} onChange={e => { setLockPasswordConfirm(e.target.value); setLockError(""); }}
+                    onKeyDown={e => e.key === "Enter" && handleVerifyOtp()} />
+                  {lockError && <div className={styles.lockError}>{lockError}</div>}
+                  <div className={styles.lockModalActions}>
+                    <button className={styles.btn} onClick={handleVerifyOtp} disabled={lockOtpLoading}>
+                      {lockOtpLoading ? "Verifying…" : "Reset password"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

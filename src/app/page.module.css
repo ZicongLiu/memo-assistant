@@ -2631,3 +2631,240 @@
 .mobileMain ~ .themePicker {
   bottom: 70px;
 }
+
+/* ─── Backup / Restore ───────────────────────────────────────────────────── */
+
+.btnDanger {
+  background: linear-gradient(135deg, #b91c1c 0%, #ef4444 100%);
+}
+.btnDanger:hover { opacity: 0.88; }
+
+.backupRow {
+  display: flex;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.backupCard {
+  flex: 1;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface-raised);
+}
+
+.backupCardTitle {
+  font-weight: 700;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.backupCardDesc {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  flex: 1;
+  margin: 0;
+}
+
+.restoreConfirm {
+  margin-top: 14px;
+  padding: 16px 18px;
+  border: 1.5px solid #fca5a5;
+  border-radius: var(--radius);
+  background: #fff5f5;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.restoreConfirmInfo {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.restoreConfirmIcon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.restoreConfirmDetails {
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+  margin-top: 4px;
+  line-height: 1.5;
+}
+
+.restoreConfirmActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+@media (max-width: 560px) {
+  .backupRow {
+    flex-direction: column;
+  }
+}
+
+/* ─── Project lock styles ────────────────────────────────────────────────── */
+
+.projectListPrivate {
+  background: linear-gradient(90deg, var(--surface-raised) 0%, var(--surface) 100%);
+  border-left: 3px solid var(--accent);
+}
+
+.projectLockIcon {
+  margin-right: 5px;
+  font-size: 0.9em;
+}
+
+/* ─── Lock dialog modal ──────────────────────────────────────────────────── */
+
+.lockOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 10, 40, 0.55);
+  backdrop-filter: blur(4px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.lockModal {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-modal);
+  width: 100%;
+  max-width: 440px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  border: 1.5px solid var(--border);
+}
+
+.lockModalHeader {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.lockModalIcon {
+  font-size: 1.6rem;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.lockModalTitle {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 2px;
+}
+
+.lockModalSub {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.5;
+}
+
+.lockModalClose {
+  margin-left: auto;
+  background: none;
+  border: none;
+  font-size: 1.3rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.lockModalClose:hover { color: var(--text); }
+
+.lockModalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.lockLabel {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: -4px;
+}
+
+.lockLabelOptional {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.lockError {
+  font-size: 0.82rem;
+  color: #ef4444;
+  background: #fff5f5;
+  border: 1px solid #fca5a5;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.lockModalActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.lockRecoveryHint {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+}
+
+/* ─── Mobile / Web layout toggle ─────────────────────────────────────────── */
+
+.viewToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--surface-raised);
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 5px;
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 900;
+  box-shadow: var(--shadow-card);
+}
+
+.viewToggleBtn {
+  padding: 4px 10px;
+  border-radius: 16px;
+  border: none;
+  background: none;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.viewToggleBtnActive {
+  background: var(--accent);
+  color: #fff;
+}
