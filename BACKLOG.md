@@ -1,35 +1,25 @@
 # FlowDesk — Development Backlog
 
-This file tracks pending and resolved development items.
-- Add new items with `[ BACKLOG ]` status.
-- When picked up for implementation, change to `[ IN PROGRESS ]`.
-- When done, change to `[ DONE ]` and add a resolution note.
+This file mirrors open GitHub Issues. Each backlog item links to its Issue.
+- New items: add here + `gh issue create` to open a GH Issue
+- When resolved: close the GH Issue + move to Completed below
 
 ---
 
 ## Backlog
 
-### [ BACKLOG ] Project-wise boards (non-daily, multi-board per project)
+### [ BACKLOG ] Project-wise boards — [Issue #1](https://github.com/ZicongLiu/memo-assistant/issues/1)
 **Requested:** 2026-04-10
 **Description:**
 - Each project can have multiple named boards (not tied to a calendar date)
 - User can create, rename, switch between, and close/archive boards per project
 - Boards live under a dedicated "Boards" tab
-- **Note:** The data model (`ProjectBoard` interface), state variables, and most handler functions are already implemented in `page.tsx`. What's missing is the JSX render block for `tab === "boards"` — the UI to list boards, open a board detail view, and the wrap-up panel for project boards.
+- **Note:** Data model, state, and handlers already exist in `page.tsx`. Missing: JSX render block for `tab === "boards"`.
 
-### [ BACKLOG ] GitHub Issues integration for backlog management
+### [ BACKLOG ] Update Dev Roadmap checklist in Settings — [Issue #2](https://github.com/ZicongLiu/memo-assistant/issues/2)
 **Requested:** 2026-04-10
 **Description:**
-- Install `gh` CLI (`brew install gh && gh auth login`) to manage backlog items as GitHub Issues
-- When a backlog item is added, create a corresponding GitHub Issue with a label (e.g. `backlog`)
-- When resolved, close the Issue and add a resolution comment
-- Blocked on: `gh` CLI not yet installed on this machine
-
-### [ BACKLOG ] Dev Roadmap checklist in Settings — mark completed items
-**Requested:** (implicit — existing checklist has "Mobile-friendly layout" still marked undone even though it's done)
-**Description:**
-- Update the Development Roadmap checklist in the Settings tab to reflect completed features
-- Items to mark done: Mobile-friendly layout, subtask UX on board, board history detail view
+- Mark completed items in the hardcoded roadmap checklist: Mobile layout, subtask board UX, board history detail view
 
 ---
 
@@ -37,7 +27,11 @@ This file tracks pending and resolved development items.
 
 ### [ DONE ] Task archive / soft delete
 **Resolved:** 2026-04-10
-**Resolution:** Deleting from Tasks tab archives the task (hidden from all views). Archived toggle in filter bar shows archived tasks with Restore and permanent Delete buttons. Deleting from the daily board only removes it from the board, task is preserved.
+**Resolution:** Deleting from Tasks tab archives the task. Archived toggle in filter bar shows archived tasks with Restore and permanent Delete buttons.
+
+### [ DONE ] GitHub Issues integration for backlog management
+**Resolved:** 2026-04-10
+**Resolution:** `gh` CLI installed and authenticated. Backlog items now tracked as GitHub Issues with labels. Workflow: `gh issue create` to add, `gh issue close` to resolve.
 
 ---
 
@@ -45,6 +39,7 @@ This file tracks pending and resolved development items.
 
 | Date       | Item                                      | Notes                                      |
 |------------|-------------------------------------------|--------------------------------------------|
+| 2026-04-10 | GitHub Issues backlog integration         | gh CLI authenticated, labels created, issues #1 #2 opened |
 | 2026-04-10 | Task archive / soft delete                | Archive on delete, restore, permanent delete |
 | 2026-04-10 | Save race condition fix                   | Drain-queue persist pattern with refs      |
 | 2026-04-10 | One-board-per-day daily board simplification | Wrap-up no longer creates duplicate board |
