@@ -2868,3 +2868,51 @@
   background: var(--accent);
   color: #fff;
 }
+
+/* ─── Lock session expiry row ────────────────────────────────────────────── */
+
+.lockSessionRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: var(--surface-raised);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.lockSessionLabel {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.lockSessionNote {
+  font-size: 0.79rem;
+  color: var(--text-muted);
+}
+
+.lockSessionRow .select {
+  min-width: 150px;
+}
+
+/* ─── Locked project in sidebar / pills ──────────────────────────────────── */
+
+.sidebarProjectLocked {
+  opacity: 0.65;
+  font-style: italic;
+}
+.sidebarProjectLocked:hover {
+  opacity: 0.9;
+}
+
+.pillLocked {
+  opacity: 0.6;
+  font-style: italic;
+}
+.pillLocked:hover {
+  opacity: 0.85;
+}

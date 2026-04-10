@@ -69,7 +69,7 @@ interface BotJob {
   projectFilter?: string | null;      // null = all projects
   priorityFilter?: "All" | "High" | "Medium" | "Low";
 }
-interface Settings { jobs: BotJob[] }
+interface Settings { jobs: BotJob[]; lockSessionDays?: number; }
 interface HubState {
   tasks: Task[];
   projects: Project[];
@@ -286,8 +286,42 @@ export default function Home() {
     { id: "violet", label: "Violet", swatch: "#7c3aed" },
   ];
 
-  // Private project lock / unlock
-  const [unlockedProjects, setUnlockedProjects] = useState<Set<string>>(new Set());
+  // Private project lock / unlock — persisted in localStorage with TTL
+  // Storage key → JSON: { [projectId]: unlockedUntilMs }
+  const UNLOCK_STORE = "phub_unlocks";
+  function readUnlockStore(): Record<string, number> {
+    try { return JSON.parse(localStorage.getItem(UNLOCK_STORE) ?? "{}"); } catch { return {}; }
+  }
+  function writeUnlockStore(store: Record<string, number>) {
+    localStorage.setItem(UNLOCK_STORE, JSON.stringify(store));
+  }
+  function getLockSessionMs() {
+    const days = state?.settings?.lockSessionDays ?? 1;
+    return days * 24 * 60 * 60 * 1000;
+  }
+  // Derive live unlocked set from localStorage (re-checked on each render via useMemo-like inline)
+  const [unlockTick, setUnlockTick] = useState(0); // bump to force re-derive after lock/unlock
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const unlockedProjects: Set<string> = (() => {
+    void unlockTick; // depend on tick so React re-evaluates when it changes
+    if (typeof window === "undefined") return new Set<string>();
+    const now = Date.now();
+    const store = readUnlockStore();
+    return new Set(Object.entries(store).filter(([, exp]) => exp > now).map(([id]) => id));
+  })();
+
+  function persistUnlock(projectId: string) {
+    const store = readUnlockStore();
+    store[projectId] = Date.now() + getLockSessionMs();
+    writeUnlockStore(store);
+    setUnlockTick(t => t + 1);
+  }
+  function persistLock(projectId: string) {
+    const store = readUnlockStore();
+    delete store[projectId];
+    writeUnlockStore(store);
+    setUnlockTick(t => t + 1);
+  }
   const [lockDialog, setLockDialog] = useState<{
     projectId: string;
     mode: "unlock" | "setPassword" | "changePassword" | "forgot" | "verifyOtp";
@@ -645,7 +679,7 @@ export default function Home() {
         : p
     );
     await persist({ ...state, projects: updated });
-    setUnlockedProjects(prev => { const n = new Set(prev); n.add(lockDialog.projectId); return n; });
+    persistUnlock(lockDialog.projectId);
     setLockDialog(null);
   }
 
@@ -655,12 +689,16 @@ export default function Home() {
     if (!proj?.passwordHash || !proj?.passwordSalt) { setLockError("No password set."); return; }
     const hash = await hashPassword(lockPassword, proj.passwordSalt);
     if (hash !== proj.passwordHash) { setLockError("Incorrect password."); return; }
-    setUnlockedProjects(prev => { const n = new Set(prev); n.add(lockDialog.projectId); return n; });
+    const pid = lockDialog.projectId;
+    persistUnlock(pid);
     setLockDialog(null);
+    // Navigate to that project's tasks
+    setFilterProject(pid);
+    if (tab !== "tasks") setTab("tasks");
   }
 
   function handleLockProject(projectId: string) {
-    setUnlockedProjects(prev => { const n = new Set(prev); n.delete(projectId); return n; });
+    persistLock(projectId);
   }
 
   async function handleRemoveProjectPassword() {
@@ -671,7 +709,7 @@ export default function Home() {
         : p
     );
     await persist({ ...state, projects: updated });
-    setUnlockedProjects(prev => { const n = new Set(prev); n.delete(lockDialog.projectId); return n; });
+    persistLock(lockDialog.projectId);
     setLockDialog(null);
   }
 
@@ -715,7 +753,7 @@ export default function Home() {
         p.id === lockDialog.projectId ? { ...p, passwordHash: hash, passwordSalt: salt } : p
       );
       await persist({ ...state, projects: updated });
-      setUnlockedProjects(prev => { const n = new Set(prev); n.add(lockDialog.projectId!); return n; });
+      persistUnlock(lockDialog.projectId!);
       setLockDialog(null);
     } catch (e) {
       setLockError("Invalid or expired code.");
@@ -1552,15 +1590,23 @@ export default function Home() {
                 <span className={styles.sidebarProjectName}>All Tasks</span>
                 <span className={styles.sidebarProjectCount}>{activeTasks.length}</span>
               </button>
-              {projects.map((p, i) => (
+              {projects.map((p, i) => {
+                const locked = isProjectLocked(p.id);
+                return (
                 <button key={p.id}
-                  className={`${styles.sidebarProject} ${filterProject === p.id && tab === "tasks" ? styles.sidebarProjectActive : ""}`}
-                  onClick={() => { setFilterProject(p.id); if (tab !== "tasks") setTab("tasks"); }}>
+                  className={`${styles.sidebarProject} ${filterProject === p.id && tab === "tasks" ? styles.sidebarProjectActive : ""} ${locked ? styles.sidebarProjectLocked : ""}`}
+                  onClick={() => {
+                    if (locked) { openLockDialog(p.id, "unlock"); return; }
+                    setFilterProject(p.id); if (tab !== "tasks") setTab("tasks");
+                  }}>
                   <span className={styles.sidebarProjectDot} style={{ background: PROJECT_COLORS[i % PROJECT_COLORS.length] }} />
-                  <span className={styles.sidebarProjectName}>{p.name}</span>
-                  <span className={styles.sidebarProjectCount}>{state.tasks.filter(t => !t.done && t.projectId === p.id).length}</span>
+                  <span className={styles.sidebarProjectName}>{locked ? "🔒 " : ""}{p.name}</span>
+                  {!locked && <span className={styles.sidebarProjectCount}>{state.tasks.filter(t => !t.done && t.projectId === p.id).length}</span>}
+                  {locked && <span className={styles.sidebarProjectCount} style={{ opacity: 0.4 }}>🔒</span>}
                 </button>
-              ))}
+                );
+              })}
+
             </div>
             {saving && <div className={styles.sidebarSaving}>Saving…</div>}
           </aside>
@@ -1621,9 +1667,16 @@ export default function Home() {
             <div className={styles.filters}>
               <div className={styles.projectPills}>
                 <button className={`${styles.pill} ${filterProject === "all" ? styles.pillActive : ""}`} onClick={() => setFilterProject("all")}>All</button>
-                {projects.map(p => (
-                  <button key={p.id} className={`${styles.pill} ${filterProject === p.id ? styles.pillActive : ""}`} onClick={() => setFilterProject(p.id)}>{p.name}</button>
-                ))}
+                {projects.map(p => {
+                  const locked = isProjectLocked(p.id);
+                  return (
+                    <button key={p.id}
+                      className={`${styles.pill} ${filterProject === p.id ? styles.pillActive : ""} ${locked ? styles.pillLocked : ""}`}
+                      onClick={() => { if (locked) { openLockDialog(p.id, "unlock"); return; } setFilterProject(p.id); }}>
+                      {locked ? "🔒 " : ""}{p.name}
+                    </button>
+                  );
+                })}
               </div>
               <label className={styles.filterToggle}>
                 <input type="checkbox" checked={filterDone} onChange={e => setFilterDone(e.target.checked)} /> Completed
@@ -2366,6 +2419,29 @@ export default function Home() {
                   );
                 })}
               </ul>
+
+              {/* Lock session expiry */}
+              <div className={styles.lockSessionRow}>
+                <span className={styles.lockSessionLabel}>🔒 Unlock session expires after</span>
+                <select
+                  className={styles.select}
+                  value={state.settings?.lockSessionDays ?? 1}
+                  onChange={async e => {
+                    if (!state) return;
+                    const days = Number(e.target.value);
+                    await persist({ ...state, settings: { ...(state.settings ?? { jobs: [] }), lockSessionDays: days } });
+                  }}
+                >
+                  <option value={0.042}>1 hour</option>
+                  <option value={0.25}>6 hours</option>
+                  <option value={0.5}>12 hours</option>
+                  <option value={1}>1 day (default)</option>
+                  <option value={3}>3 days</option>
+                  <option value={7}>1 week</option>
+                  <option value={30}>30 days</option>
+                </select>
+                <span className={styles.lockSessionNote}>After this time, locked projects will require the password again.</span>
+              </div>
             </section>
 
             {/* ── Data Backup & Restore ── */}
