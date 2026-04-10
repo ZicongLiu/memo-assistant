@@ -17,11 +17,27 @@ This file tracks pending and resolved development items.
 - Boards live under a dedicated "Boards" tab
 - **Note:** The data model (`ProjectBoard` interface), state variables, and most handler functions are already implemented in `page.tsx`. What's missing is the JSX render block for `tab === "boards"` — the UI to list boards, open a board detail view, and the wrap-up panel for project boards.
 
+### [ BACKLOG ] GitHub Issues integration for backlog management
+**Requested:** 2026-04-10
+**Description:**
+- Install `gh` CLI (`brew install gh && gh auth login`) to manage backlog items as GitHub Issues
+- When a backlog item is added, create a corresponding GitHub Issue with a label (e.g. `backlog`)
+- When resolved, close the Issue and add a resolution comment
+- Blocked on: `gh` CLI not yet installed on this machine
+
+### [ BACKLOG ] Dev Roadmap checklist in Settings — mark completed items
+**Requested:** (implicit — existing checklist has "Mobile-friendly layout" still marked undone even though it's done)
+**Description:**
+- Update the Development Roadmap checklist in the Settings tab to reflect completed features
+- Items to mark done: Mobile-friendly layout, subtask UX on board, board history detail view
+
 ---
 
 ## Completed Items
 
-*(None yet — items will be moved here when resolved)*
+### [ DONE ] Task archive / soft delete
+**Resolved:** 2026-04-10
+**Resolution:** Deleting from Tasks tab archives the task (hidden from all views). Archived toggle in filter bar shows archived tasks with Restore and permanent Delete buttons. Deleting from the daily board only removes it from the board, task is preserved.
 
 ---
 
@@ -29,6 +45,7 @@ This file tracks pending and resolved development items.
 
 | Date       | Item                                      | Notes                                      |
 |------------|-------------------------------------------|--------------------------------------------|
+| 2026-04-10 | Task archive / soft delete                | Archive on delete, restore, permanent delete |
 | 2026-04-10 | Save race condition fix                   | Drain-queue persist pattern with refs      |
 | 2026-04-10 | One-board-per-day daily board simplification | Wrap-up no longer creates duplicate board |
 | 2026-04-10 | Notes field on task creation              | Both Tasks tab and daily board setup form  |
