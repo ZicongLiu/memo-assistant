@@ -59,6 +59,7 @@ interface Project {
   passwordHash?: string;      // PBKDF2-SHA256 hex
   passwordSalt?: string;      // 16-byte random hex
   recoveryEmail?: string;     // email for forgot-password OTP
+  lockSessionDays?: number;   // per-project notes-unlock TTL (overrides global default)
 }
 interface LearningTopic { id: string; name: string; addedAt: string; trackWeekly: boolean; lastSeenIds: string[]; }
 interface BotJob {
@@ -82,7 +83,12 @@ interface HubState {
 
 const STORE_KEY = "phub_v6";
 const PROJECT_COLORS = ["#6366f1","#ec4899","#f59e0b","#10b981","#3b82f6","#8b5cf6","#ef4444","#14b8a6"];
-const todayStr = new Date().toISOString().slice(0, 10);
+
+// Use local date (not UTC) so the board date matches the user's timezone.
+function getLocalDateStr() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 
 const DEFAULT_JOBS: BotJob[] = [
   { id: "job_digest", name: "Daily Digest",     type: "digest",   cron: "0 10 * * 1-5", enabled: true, projectFilter: null, priorityFilter: "All" },
@@ -183,13 +189,16 @@ function sortedBoardTaskIds(taskIds: string[], tasks: Task[]): string[] {
     return (BOARD_PRIO[tb.priority] ?? 0) - (BOARD_PRIO[ta.priority] ?? 0);
   });
 }
-function withSortedTodayBoard(boards: DailyBoard[], tasks: Task[]): DailyBoard[] {
-  return boards.map(b => b.date === todayStr ? { ...b, taskIds: sortedBoardTaskIds(b.taskIds, tasks) } : b);
+function withSortedTodayBoard(boards: DailyBoard[], tasks: Task[], today: string): DailyBoard[] {
+  return boards.map(b => b.date === today ? { ...b, taskIds: sortedBoardTaskIds(b.taskIds, tasks) } : b);
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function Home() {
+  // Computed client-side using local timezone — avoids UTC/server mismatch losing today's board on refresh
+  const [todayStr] = useState<string>(getLocalDateStr);
+
   const [state, setState] = useState<HubState | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -299,7 +308,11 @@ export default function Home() {
   function writeUnlockStore(store: Record<string, number>) {
     localStorage.setItem(UNLOCK_STORE, JSON.stringify(store));
   }
-  function getLockSessionMs() {
+  function getLockSessionMs(projectId?: string) {
+    if (projectId) {
+      const proj = state?.projects.find(p => p.id === projectId);
+      if (proj?.lockSessionDays !== undefined) return proj.lockSessionDays * 24 * 60 * 60 * 1000;
+    }
     const days = state?.settings?.lockSessionDays ?? 1;
     return days * 24 * 60 * 60 * 1000;
   }
@@ -314,20 +327,23 @@ export default function Home() {
     return new Set(Object.entries(store).filter(([, exp]) => exp > now).map(([id]) => id));
   })();
 
-  function persistUnlock(projectId: string) {
+  function persistUnlock(key: string, projectId?: string) {
     const store = readUnlockStore();
-    store[projectId] = Date.now() + getLockSessionMs();
+    store[key] = Date.now() + getLockSessionMs(projectId);
     writeUnlockStore(store);
     setUnlockTick(t => t + 1);
   }
   function persistLock(projectId: string) {
     const store = readUnlockStore();
-    delete store[projectId];
+    for (const key of Object.keys(store)) {
+      if (key === projectId || key.startsWith(projectId + ":")) delete store[key];
+    }
     writeUnlockStore(store);
     setUnlockTick(t => t + 1);
   }
   const [lockDialog, setLockDialog] = useState<{
     projectId: string;
+    taskId?: string;           // set when unlocking a specific task's notes
     mode: "unlock" | "setPassword" | "changePassword" | "forgot" | "verifyOtp";
   } | null>(null);
   const [lockPassword, setLockPassword] = useState("");
@@ -397,6 +413,7 @@ export default function Home() {
   const [pbWrapResolveIds, setPbWrapResolveIds] = useState<Set<string>>(new Set());
   const [pbWrapCarryIds, setPbWrapCarryIds] = useState<Set<string>>(new Set());
   const [pbShowWrapped, setPbShowWrapped] = useState(false);
+  const [pbFilterProjectId, setPbFilterProjectId] = useState<string>("all"); // "all" or a project id
 
   useEffect(() => {
     loadState().then((s) => {
@@ -414,7 +431,7 @@ export default function Home() {
       }
       if (projectsChanged && s) saveStateApi(s);
       // Sort today's board on load so initial display is always ordered
-      if (s?.dailyBoards) s = { ...s, dailyBoards: withSortedTodayBoard(s.dailyBoards, s.tasks ?? []) };
+      if (s?.dailyBoards) s = { ...s, dailyBoards: withSortedTodayBoard(s.dailyBoards, s.tasks ?? [], getLocalDateStr()) };
       setState(s);
       if (s?.projects?.[0]) setNewTaskProject(s.projects[0].id);
       if (s?.settings) {
@@ -504,7 +521,7 @@ export default function Home() {
       const updatedTasks = state.tasks.map(t =>
         t.id === taskId ? { ...t, done: false, doneAt: undefined } : t
       );
-      persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks) });
+      persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr) });
     }
   }
   function confirmComplete(taskId: string, skipOutput = false) {
@@ -512,7 +529,7 @@ export default function Home() {
     const updatedTasks = state.tasks.map(t =>
       t.id === taskId ? { ...t, done: true, doneAt: new Date().toISOString(), output: skipOutput ? t.output : (completionOutput.trim() || t.output) } : t
     );
-    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks) });
+    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr) });
     setCompletingTaskId(null); setCompletionOutput("");
   }
   function handleDeleteTask(taskId: string) {
@@ -695,8 +712,8 @@ export default function Home() {
 
   // ── Private project lock / unlock ────────────────────────────────────────────
 
-  function openLockDialog(projectId: string, mode: "unlock" | "setPassword" | "changePassword" | "forgot" | "verifyOtp") {
-    setLockDialog({ projectId, mode });
+  function openLockDialog(projectId: string, mode: "unlock" | "setPassword" | "changePassword" | "forgot" | "verifyOtp", taskId?: string) {
+    setLockDialog({ projectId, mode, taskId });
     setLockPassword(""); setLockPasswordConfirm(""); setLockError(""); setLockOtp(""); setLockOtpLoading(false);
     const proj = state?.projects.find(p => p.id === projectId);
     setLockRecoveryEmail(proj?.recoveryEmail ?? "");
@@ -714,7 +731,7 @@ export default function Home() {
         : p
     );
     await persist({ ...state, projects: updated });
-    persistUnlock(lockDialog.projectId);
+    persistUnlock(lockDialog.projectId, lockDialog.projectId);
     setLockDialog(null);
   }
 
@@ -725,11 +742,16 @@ export default function Home() {
     const hash = await hashPassword(lockPassword, proj.passwordSalt);
     if (hash !== proj.passwordHash) { setLockError("Incorrect password."); return; }
     const pid = lockDialog.projectId;
-    persistUnlock(pid);
+    if (lockDialog.taskId) {
+      // Unlock notes for a single task
+      persistUnlock(`${pid}:${lockDialog.taskId}`, pid);
+    } else {
+      // Unlock all notes in project
+      persistUnlock(pid, pid);
+      setFilterProject(pid);
+      if (tab !== "tasks") setTab("tasks");
+    }
     setLockDialog(null);
-    // Navigate to that project's tasks
-    setFilterProject(pid);
-    if (tab !== "tasks") setTab("tasks");
   }
 
   function handleLockProject(projectId: string) {
@@ -788,7 +810,7 @@ export default function Home() {
         p.id === lockDialog.projectId ? { ...p, passwordHash: hash, passwordSalt: salt } : p
       );
       await persist({ ...state, projects: updated });
-      persistUnlock(lockDialog.projectId!);
+      persistUnlock(lockDialog.projectId!, lockDialog.projectId!);
       setLockDialog(null);
     } catch (e) {
       setLockError("Invalid or expired code.");
@@ -868,6 +890,12 @@ export default function Home() {
   }
 
   // ── Project boards ────────────────────────────────────────────────────────────
+
+  function goToProjectBoards(projectId: string) {
+    setPbFilterProjectId(projectId);
+    setTab("boards");
+    setPbView("list");
+  }
 
   function openPbSetup(projectId?: string) {
     if (!state) return;
@@ -969,7 +997,7 @@ export default function Home() {
     const updatedTasks = task.done
       ? state.tasks.map(t => t.id === taskId ? { ...t, done: false, doneAt: undefined } : t)
       : state.tasks.map(t => t.id === taskId ? { ...t, done: true, doneAt: new Date().toISOString() } : t);
-    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks) });
+    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr) });
   }
 
   // ── Daily board ───────────────────────────────────────────────────────────────
@@ -985,7 +1013,7 @@ export default function Home() {
       tasks
         .filter(t => !t.done
           && (memoId ? t.projectId === memoId : true)
-          && (t.priority === "High" || prevBoardIds.has(t.id)))
+          && prevBoardIds.has(t.id))
         .map(t => t.id)
     );
   }
@@ -1062,7 +1090,7 @@ export default function Home() {
     if (!state) return;
     const next: "High" | "Medium" | "Low" = current === "High" ? "Medium" : current === "Medium" ? "Low" : "High";
     const updatedTasks = state.tasks.map(t => t.id === taskId ? { ...t, priority: next } : t);
-    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks) });
+    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr) });
   }
 
   function removeDailyTask(taskId: string) {
@@ -1177,6 +1205,8 @@ export default function Home() {
 
   function renderSubtree(nodes: SubtaskNode[], taskId: string, depth: number): React.ReactNode {
     if (!nodes?.length) return null;
+    const parentTask = state!.tasks.find(t => t.id === taskId);
+    const notesLocked = parentTask ? isTaskNotesLocked(parentTask) : false;
     return nodes.map(node => {
       const children = node.children ?? [];
       const hasChildren = children.length > 0;
@@ -1223,10 +1253,14 @@ export default function Home() {
               <span className={styles.subChildCount}>{childDoneCount}/{childCount}</span>
             )}
             <button
-              className={`${styles.subNotesBtn} ${node.notes ? styles.subNotesBtnHasNotes : ""}`}
-              onClick={e => { e.stopPropagation(); editingSubNodeId === node.id ? setEditingSubNodeId(null) : openSubNodeEdit(taskId, node); }}
-              title={node.notes ? "Edit notes" : "Add notes"}
-            >✏️</button>
+              className={`${styles.subNotesBtn} ${!notesLocked && node.notes ? styles.subNotesBtnHasNotes : ""} ${notesLocked ? styles.notesBtnLocked : ""}`}
+              onClick={e => {
+                e.stopPropagation();
+                if (notesLocked) { openLockDialog(parentTask!.projectId, "unlock", taskId); return; }
+                editingSubNodeId === node.id ? setEditingSubNodeId(null) : openSubNodeEdit(taskId, node);
+              }}
+              title={notesLocked ? "Notes locked — click to unlock" : node.notes ? "Edit notes" : "Add notes"}
+            >{notesLocked ? "🔒" : "✏️"}</button>
             <button className={styles.subAddChildBtn}
               onClick={() => setAddingSubFor({ taskId, parentNodeId: node.id })}
               title="Add child subtask">+</button>
@@ -1236,7 +1270,9 @@ export default function Home() {
 
           {/* Subtask node notes preview */}
           {node.notes && editingSubNodeId !== node.id && (
-            <div className={styles.subNotesPreview}>{node.notes.split("\n")[0]}</div>
+            notesLocked
+              ? <div className={styles.notesLockedHint} onClick={() => openLockDialog(parentTask!.projectId, "unlock", taskId)}>🔒 Notes hidden — click to unlock</div>
+              : <div className={styles.subNotesPreview}>{node.notes.split("\n")[0]}</div>
           )}
 
           {/* Combined title + notes edit panel */}
@@ -1251,15 +1287,22 @@ export default function Home() {
                 onKeyDown={e => { if (e.key === "Escape") setEditingSubNodeId(null); }}
                 onClick={e => e.stopPropagation()}
               />
-              <textarea
-                className={styles.subNotesTextarea}
-                value={subNodeNotesDraft}
-                rows={2}
-                placeholder="Add notes…"
-                onChange={e => setSubNodeNotesDraft(e.target.value)}
-                onKeyDown={e => { if (e.key === "Escape") setEditingSubNodeId(null); }}
-                onClick={e => e.stopPropagation()}
-              />
+              {notesLocked ? (
+                <div className={styles.notesLockedMsg}>
+                  Notes are locked.{" "}
+                  <button className={styles.linkBtn} onClick={e => { e.stopPropagation(); setEditingSubNodeId(null); openLockDialog(parentTask!.projectId, "unlock", taskId); }}>Unlock to edit</button>
+                </div>
+              ) : (
+                <textarea
+                  className={styles.subNotesTextarea}
+                  value={subNodeNotesDraft}
+                  rows={2}
+                  placeholder="Add notes…"
+                  onChange={e => setSubNodeNotesDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Escape") setEditingSubNodeId(null); }}
+                  onClick={e => e.stopPropagation()}
+                />
+              )}
               <div className={styles.notesActions}>
                 <button className={styles.subtaskAddBtn} onClick={e => { e.stopPropagation(); saveSubNodeEdit(taskId, node.id); }}>Save</button>
                 <button className={styles.subtaskCancelBtn} onClick={e => { e.stopPropagation(); setEditingSubNodeId(null); }}>Cancel</button>
@@ -1304,21 +1347,32 @@ export default function Home() {
     }
   }
 
-  // Private project helper — is a project locked?
+  // Private project helper — is a project notes-locked? (tasks always visible, only notes masked)
   const isProjectLocked = (projectId: string) => {
     const proj = state.projects.find(p => p.id === projectId);
     return !!(proj?.private && !unlockedProjects.has(projectId));
   };
 
-  // Top-level = no parentTaskId, exclude archived and locked private project tasks
-  const topLevelTasks = state.tasks.filter(t => !t.parentTaskId && !t.archived && !isProjectLocked(t.projectId));
+  // Per-task notes lock: true if notes should be masked (project is private and neither project nor task is unlocked)
+  const isTaskNotesLocked = (task: Task): boolean => {
+    const proj = state.projects.find(p => p.id === task.projectId);
+    if (!proj?.private) return false;
+    const store = readUnlockStore();
+    const now = Date.now();
+    if (store[task.projectId] && store[task.projectId] > now) return false;
+    if (store[`${task.projectId}:${task.id}`] && store[`${task.projectId}:${task.id}`] > now) return false;
+    return true;
+  };
+
+  // Top-level = no parentTaskId, exclude archived (tasks in locked projects ARE shown — notes masked)
+  const topLevelTasks = state.tasks.filter(t => !t.parentTaskId && !t.archived);
   const taskSearchLower = taskSearch.toLowerCase();
   const tasks = topLevelTasks
     .filter(t => filterDone ? t.done : !t.done)
     .filter(t => filterProject === "all" || t.projectId === filterProject)
-    .filter(t => !taskSearch || t.title.toLowerCase().includes(taskSearchLower) || (t.notes ?? "").toLowerCase().includes(taskSearchLower));
+    .filter(t => !taskSearch || t.title.toLowerCase().includes(taskSearchLower) || (!isTaskNotesLocked(t) && (t.notes ?? "").toLowerCase().includes(taskSearchLower)));
 
-  const activeTasks = state.tasks.filter(t => !t.done && !t.archived && !isProjectLocked(t.projectId));
+  const activeTasks = state.tasks.filter(t => !t.done && !t.archived);
 
   // Archived tasks (for the recoverable trash view)
   const archivedTasks = state.tasks.filter(t => !!t.archived && !t.parentTaskId
@@ -1363,11 +1417,19 @@ export default function Home() {
           </div>
 
           <div className={styles.taskActions}>
-            <button
-              className={`${styles.notesBtn} ${task.notes ? styles.notesBtnHasNotes : ""} ${notesOpenFor === task.id ? styles.notesBtnOpen : ""}`}
-              onClick={() => notesOpenFor === task.id ? setNotesOpenFor(null) : openNotes(task)}
-              title={task.notes ? "Edit notes" : "Add notes"}
-            >✏️</button>
+            {(() => {
+              const notesLocked = isTaskNotesLocked(task);
+              return (
+                <button
+                  className={`${styles.notesBtn} ${!notesLocked && task.notes ? styles.notesBtnHasNotes : ""} ${!notesLocked && notesOpenFor === task.id ? styles.notesBtnOpen : ""} ${notesLocked ? styles.notesBtnLocked : ""}`}
+                  onClick={() => {
+                    if (notesLocked) { openLockDialog(task.projectId, "unlock", task.id); return; }
+                    notesOpenFor === task.id ? setNotesOpenFor(null) : openNotes(task);
+                  }}
+                  title={notesLocked ? "Notes locked — click to unlock" : task.notes ? "Edit notes" : "Add notes"}
+                >{notesLocked ? "🔒" : "✏️"}</button>
+              );
+            })()}
             <button
               className={`${styles.subtaskToggle} ${!isTaskCollapsed && (totalCount > 0 || childCount > 0) ? styles.subtaskToggleOpen : ""}`}
               onClick={() => setCollapsedTasks(prev => {
@@ -1385,15 +1447,27 @@ export default function Home() {
         </div>
 
         {/* Inline notes preview — hidden when edit panel is open */}
-        {task.notes && notesOpenFor !== task.id && taskEditOpenFor !== task.id && (
-          <div
-            className={`${styles.notesPreview} ${notesExpandedFor.has(task.id) ? styles.notesPreviewExpanded : ""}`}
-            onClick={e => { e.stopPropagation(); setNotesExpandedFor(prev => { const n = new Set(prev); n.has(task.id) ? n.delete(task.id) : n.add(task.id); return n; }); }}
-            title="Click to expand · Click title to edit"
-          >
-            {notesExpandedFor.has(task.id) ? task.notes : task.notes.split("\n")[0]}
-          </div>
-        )}
+        {task.notes && notesOpenFor !== task.id && taskEditOpenFor !== task.id && (() => {
+          const notesLocked = isTaskNotesLocked(task);
+          if (notesLocked) {
+            return (
+              <div
+                className={styles.notesLockedHint}
+                onClick={() => openLockDialog(task.projectId, "unlock", task.id)}
+                title="Click to unlock notes"
+              >🔒 Notes hidden — click to unlock</div>
+            );
+          }
+          return (
+            <div
+              className={`${styles.notesPreview} ${notesExpandedFor.has(task.id) ? styles.notesPreviewExpanded : ""}`}
+              onClick={e => { e.stopPropagation(); setNotesExpandedFor(prev => { const n = new Set(prev); n.has(task.id) ? n.delete(task.id) : n.add(task.id); return n; }); }}
+              title="Click to expand · Click title to edit"
+            >
+              {notesExpandedFor.has(task.id) ? task.notes : task.notes.split("\n")[0]}
+            </div>
+          );
+        })()}
 
         {/* Subtask nodes — visible by default */}
         {!isTaskCollapsed && (
@@ -1451,37 +1525,47 @@ export default function Home() {
         )}
 
         {/* Combined title + notes edit panel */}
-        {taskEditOpenFor === task.id && (
-          <div className={styles.taskEditPanel}>
-            <div className={styles.taskEditField}>
-              <label className={styles.taskEditLabel}>Title</label>
-              <input
-                className={styles.taskEditInput}
-                value={taskEditTitle}
-                autoFocus
-                onChange={e => setTaskEditTitle(e.target.value)}
-                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) saveTaskEdit(task.id); if (e.key === "Escape") setTaskEditOpenFor(null); }}
-                onClick={e => e.stopPropagation()}
-              />
+        {taskEditOpenFor === task.id && (() => {
+          const notesLocked = isTaskNotesLocked(task);
+          return (
+            <div className={styles.taskEditPanel}>
+              <div className={styles.taskEditField}>
+                <label className={styles.taskEditLabel}>Title</label>
+                <input
+                  className={styles.taskEditInput}
+                  value={taskEditTitle}
+                  autoFocus
+                  onChange={e => setTaskEditTitle(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) saveTaskEdit(task.id); if (e.key === "Escape") setTaskEditOpenFor(null); }}
+                  onClick={e => e.stopPropagation()}
+                />
+              </div>
+              <div className={styles.taskEditField}>
+                <label className={styles.taskEditLabel}>Notes{notesLocked ? " 🔒" : ""}</label>
+                {notesLocked ? (
+                  <div className={styles.notesLockedMsg}>
+                    Notes are locked.{" "}
+                    <button className={styles.linkBtn} onClick={e => { e.stopPropagation(); setTaskEditOpenFor(null); openLockDialog(task.projectId, "unlock", task.id); }}>Unlock to edit</button>
+                  </div>
+                ) : (
+                  <textarea
+                    className={styles.taskEditTextarea}
+                    value={taskEditNotes}
+                    rows={4}
+                    placeholder="Add notes, links, context…"
+                    onChange={e => setTaskEditNotes(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Escape") setTaskEditOpenFor(null); }}
+                    onClick={e => e.stopPropagation()}
+                  />
+                )}
+              </div>
+              <div className={styles.taskEditActions}>
+                <button className={styles.subtaskAddBtn} onClick={e => { e.stopPropagation(); saveTaskEdit(task.id); }}>Save</button>
+                <button className={styles.subtaskCancelBtn} onClick={e => { e.stopPropagation(); setTaskEditOpenFor(null); }}>Cancel</button>
+              </div>
             </div>
-            <div className={styles.taskEditField}>
-              <label className={styles.taskEditLabel}>Notes</label>
-              <textarea
-                className={styles.taskEditTextarea}
-                value={taskEditNotes}
-                rows={4}
-                placeholder="Add notes, links, context…"
-                onChange={e => setTaskEditNotes(e.target.value)}
-                onKeyDown={e => { if (e.key === "Escape") setTaskEditOpenFor(null); }}
-                onClick={e => e.stopPropagation()}
-              />
-            </div>
-            <div className={styles.taskEditActions}>
-              <button className={styles.subtaskAddBtn} onClick={e => { e.stopPropagation(); saveTaskEdit(task.id); }}>Save</button>
-              <button className={styles.subtaskCancelBtn} onClick={e => { e.stopPropagation(); setTaskEditOpenFor(null); }}>Cancel</button>
-            </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Notes panel (standalone, kept for ✏️ button) */}
         {notesOpenFor === task.id && taskEditOpenFor !== task.id && (
@@ -1524,7 +1608,7 @@ export default function Home() {
   const todayBoard = state.dailyBoards?.find(b => b.date === todayStr) ?? null;
   const boardTaskObjects = (todayBoard?.taskIds ?? [])
     .map(id => state.tasks.find(t => t.id === id))
-    .filter((t): t is Task => !!t && !t.archived && !isProjectLocked(t.projectId));
+    .filter((t): t is Task => !!t && !t.archived);
   // Build hierarchical setup task list: parents with their children nested
   const memoProject = projects.find(p => p.name === "Memo");
   // Resolve which project ID to use for the setup filter
@@ -1628,18 +1712,22 @@ export default function Home() {
               </button>
               {projects.map((p, i) => {
                 const locked = isProjectLocked(p.id);
+                const boardCount = pbActiveBoards.filter(b => b.projectId === p.id).length;
                 return (
-                <button key={p.id}
-                  className={`${styles.sidebarProject} ${filterProject === p.id && tab === "tasks" ? styles.sidebarProjectActive : ""} ${locked ? styles.sidebarProjectLocked : ""}`}
-                  onClick={() => {
-                    if (locked) { openLockDialog(p.id, "unlock"); return; }
-                    setFilterProject(p.id); if (tab !== "tasks") setTab("tasks");
-                  }}>
-                  <span className={styles.sidebarProjectDot} style={{ background: PROJECT_COLORS[i % PROJECT_COLORS.length] }} />
-                  <span className={styles.sidebarProjectName}>{locked ? "🔒 " : ""}{p.name}</span>
-                  {!locked && <span className={styles.sidebarProjectCount}>{state.tasks.filter(t => !t.done && t.projectId === p.id).length}</span>}
-                  {locked && <span className={styles.sidebarProjectCount} style={{ opacity: 0.4 }}>🔒</span>}
-                </button>
+                <div key={p.id} className={styles.sidebarProjectRow}>
+                  <button
+                    className={`${styles.sidebarProject} ${filterProject === p.id && tab === "tasks" ? styles.sidebarProjectActive : ""}`}
+                    onClick={() => { setFilterProject(p.id); if (tab !== "tasks") setTab("tasks"); }}>
+                    <span className={styles.sidebarProjectDot} style={{ background: PROJECT_COLORS[i % PROJECT_COLORS.length] }} />
+                    <span className={styles.sidebarProjectName}>{locked ? "🔒 " : ""}{p.name}</span>
+                    <span className={styles.sidebarProjectCount}>{state.tasks.filter(t => !t.done && t.projectId === p.id).length}</span>
+                  </button>
+                  <button
+                    className={`${styles.sidebarBoardsBtn} ${tab === "boards" && pbFilterProjectId === p.id ? styles.sidebarBoardsBtnActive : ""}`}
+                    onClick={e => { e.stopPropagation(); goToProjectBoards(p.id); }}
+                    title={`${boardCount} active board${boardCount !== 1 ? "s" : ""} — open boards`}
+                  >📁{boardCount > 0 && <span className={styles.sidebarBoardsBadge}>{boardCount}</span>}</button>
+                </div>
                 );
               })}
 
@@ -1656,8 +1744,8 @@ export default function Home() {
         {tab === "tasks" && (
           <>
             <form className={styles.addForm} onSubmit={handleAddTask}>
-              <div className={styles.addFormRow}>
-                <input className={styles.input} placeholder="Add a task…" value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} />
+              <input className={styles.addFormInput} placeholder="Add a task…" value={newTaskTitle} onChange={e => setNewTaskTitle(e.target.value)} />
+              <div className={styles.addFormControls}>
                 <select className={styles.select} value={newTaskPriority} onChange={e => setNewTaskPriority(e.target.value as "High" | "Medium" | "Low")}>
                   <option>High</option><option>Medium</option><option>Low</option>
                 </select>
@@ -1723,7 +1811,7 @@ export default function Home() {
                   return (
                     <button key={p.id}
                       className={`${styles.pill} ${filterProject === p.id ? styles.pillActive : ""} ${locked ? styles.pillLocked : ""}`}
-                      onClick={() => { if (locked) { openLockDialog(p.id, "unlock"); return; } setFilterProject(p.id); }}>
+                      onClick={() => setFilterProject(p.id)}>
                       {locked ? "🔒 " : ""}{p.name}
                     </button>
                   );
@@ -1747,6 +1835,30 @@ export default function Home() {
               {taskSearch && <button className={styles.searchClear} onClick={() => setTaskSearch("")}>✕</button>}
             </div>
 
+            {/* Project boards shortcut — shown when a specific project is selected */}
+            {filterProject !== "all" && (() => {
+              const projBoards = pbActiveBoards.filter(b => b.projectId === filterProject);
+              return (
+                <div className={styles.projectBoardsShortcut}>
+                  <span className={styles.projectBoardsShortcutLabel}>
+                    📁 {projBoards.length > 0 ? `${projBoards.length} active board${projBoards.length !== 1 ? "s" : ""}` : "No active boards"}
+                  </span>
+                  <button className={styles.btnSmall} onClick={() => goToProjectBoards(filterProject)}>View boards</button>
+                  <button className={styles.btnSmall} onClick={() => { openPbSetup(filterProject); setTab("boards"); }}>+ New board</button>
+                </div>
+              );
+            })()}
+
+            {/* Unlock-all-notes banner for locked projects */}
+            {filterProject !== "all" && isProjectLocked(filterProject) && (
+              <div className={styles.notesLockedBanner}>
+                <span>🔒 Notes in this project are hidden.</span>
+                <button className={styles.btnSmall} onClick={() => openLockDialog(filterProject, "unlock")}>
+                  Show all notes
+                </button>
+              </div>
+            )}
+
             {filterArchived ? (
               /* ── Archived tasks view ── */
               archivedTasks.length === 0 ? (
@@ -1757,18 +1869,19 @@ export default function Home() {
                     const proj = state.projects.find(p => p.id === task.projectId);
                     return (
                       <li key={task.id} className={styles.taskLi}>
-                        <div className={`${styles.taskItem} ${styles.taskArchived}`}>
-                          <div className={styles.taskMain}>
-                            <div className={styles.taskTitleRow}>
-                              <span className={styles.taskTitle}>{task.title}</span>
-                              {proj && <span className={styles.project}>{proj.name}</span>}
-                              <span className={`${styles.priorityBadge} ${task.priority === "High" ? styles.prioHigh : task.priority === "Medium" ? styles.prioMedium : styles.prioLow}`}>{task.priority}</span>
+                        <div className={styles.archivedItem}>
+                          <div className={styles.archivedItemLeft}>
+                            <div className={styles.archivedItemTitle}>{task.title}</div>
+                            <div className={styles.archivedItemMeta}>
+                              {proj && <span className={styles.archivedItemProject}>{proj.name}</span>}
+                              <span className={`${styles.archivedItemPrio} ${task.priority === "High" ? styles.archivedPrioHigh : task.priority === "Medium" ? styles.archivedPrioMedium : styles.archivedPrioLow}`}>{task.priority}</span>
+                              {task.createdAt && <span className={styles.archivedItemDate}>{task.createdAt}</span>}
                             </div>
-                            {task.notes && <div className={styles.taskNotesPreview}>{task.notes.split("\n")[0]}</div>}
+                            {task.notes && <div className={styles.archivedItemNotes}>{task.notes.split("\n")[0]}</div>}
                           </div>
-                          <div className={styles.taskActions}>
-                            <button className={styles.btnSmall} onClick={() => handleRestoreTask(task.id)} title="Restore task">↩ Restore</button>
-                            <button className={styles.deleteBtn} onClick={() => handlePermanentDeleteTask(task.id)} title="Delete permanently">🗑</button>
+                          <div className={styles.archivedItemActions}>
+                            <button className={styles.btnSmall} onClick={() => handleRestoreTask(task.id)}>↩ Restore</button>
+                            <button className={styles.deleteBtnSm} onClick={() => handlePermanentDeleteTask(task.id)} title="Delete permanently">🗑</button>
                           </div>
                         </div>
                       </li>
@@ -2271,6 +2384,323 @@ export default function Home() {
           </>
         )}
 
+        {/* ── Project Boards ── */}
+        {tab === "boards" && (
+          <>
+            {/* ── Setup view ── */}
+            {pbView === "setup" && (
+              <div className={styles.dailySetup}>
+                <div className={styles.dailySetupHeader}>
+                  <div>
+                    <h2 className={styles.dailySetupTitle}>New Board</h2>
+                    <p className={styles.dailySetupDate}>Pick tasks and give it a name</p>
+                  </div>
+                  <button className={styles.subtaskCancelBtn} onClick={() => setPbView("list")}>Cancel</button>
+                </div>
+
+                {/* Board name + date + project */}
+                <div className={styles.pbSetupMeta}>
+                  <input
+                    className={styles.input}
+                    placeholder="Board name…"
+                    value={pbSetupName}
+                    onChange={e => setPbSetupName(e.target.value)}
+                  />
+                  <input
+                    className={styles.input}
+                    type="date"
+                    value={pbSetupDate}
+                    onChange={e => setPbSetupDate(e.target.value)}
+                  />
+                  <select
+                    className={styles.select}
+                    value={pbSetupProjectId}
+                    onChange={e => { setPbSetupProjectId(e.target.value); setPbSetupSelected(new Set()); }}
+                  >
+                    {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                </div>
+
+                {/* Task selection */}
+                <div className={styles.pbSetupBulk}>
+                  <button className={styles.linkBtn} onClick={() => setPbSetupSelected(new Set(pbSetupFilteredTasks.map(t => t.id)))}>Select all</button>
+                  <span className={styles.dailySep}>·</span>
+                  <button className={styles.linkBtn} onClick={() => setPbSetupSelected(new Set())}>Deselect all</button>
+                  <span className={styles.dailySelectedCount}>{pbSetupSelected.size} selected</span>
+                </div>
+                <div className={styles.searchBar}>
+                  <span className={styles.searchIcon}>🔍</span>
+                  <input
+                    className={styles.searchInput}
+                    placeholder="Search tasks…"
+                    value={pbSetupSearch}
+                    onChange={e => setPbSetupSearch(e.target.value)}
+                  />
+                  {pbSetupSearch && <button className={styles.searchClear} onClick={() => setPbSetupSearch("")}>✕</button>}
+                </div>
+                <div className={styles.dailySetupList}>
+                  {pbSetupFilteredTasks.length === 0 ? (
+                    <p className={styles.empty}>No open tasks in this project.</p>
+                  ) : pbSetupFilteredTasks.map(task => {
+                    const isSel = pbSetupSelected.has(task.id);
+                    const pClass = task.priority === "High" ? styles.priorityHigh : task.priority === "Medium" ? styles.priorityMedium : styles.priorityLow;
+                    return (
+                      <div key={task.id}
+                        className={`${styles.dailySetupRow} ${isSel ? styles.dailySetupRowSelected : ""}`}
+                        onClick={() => setPbSetupSelected(prev => { const n = new Set(prev); n.has(task.id) ? n.delete(task.id) : n.add(task.id); return n; })}>
+                        <div className={`${styles.dailySetupCheck} ${isSel ? styles.dailySetupCheckSelected : ""}`}>{isSel ? "✓" : ""}</div>
+                        <div className={styles.dailySetupRowBody}>
+                          <span className={styles.dailySetupRowTitle}>{task.title}</span>
+                          <span className={`${styles.priority} ${pClass}`}>{task.priority}</span>
+                          {task.eta && <span className={styles.eta}>due {task.eta}</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className={styles.dailySetupFooter}>
+                  <button
+                    className={styles.btn}
+                    disabled={pbSetupSelected.size === 0 || !pbSetupName.trim()}
+                    onClick={confirmPbSetup}
+                  >
+                    Create board · {pbSetupSelected.size} tasks
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── List view ── */}
+            {pbView === "list" && (
+              <div className={styles.pbListPage}>
+                <div className={styles.pbListHeader}>
+                  <h2 className={styles.pbListTitle}>Project Boards</h2>
+                  <button className={styles.btn} onClick={() => openPbSetup(pbFilterProjectId !== "all" ? pbFilterProjectId : undefined)}>+ New Board</button>
+                </div>
+
+                {/* Project filter pills */}
+                <div className={styles.projectPills}>
+                  <button className={`${styles.pill} ${pbFilterProjectId === "all" ? styles.pillActive : ""}`} onClick={() => setPbFilterProjectId("all")}>All</button>
+                  {projects.filter(p => projectBoards.some(b => b.projectId === p.id)).map(p => (
+                    <button key={p.id}
+                      className={`${styles.pill} ${pbFilterProjectId === p.id ? styles.pillActive : ""}`}
+                      onClick={() => setPbFilterProjectId(p.id)}>{p.name}</button>
+                  ))}
+                </div>
+
+                {pbActiveBoards.length === 0 && pbWrappedBoards.length === 0 ? (
+                  <div className={styles.pbEmpty}>
+                    <p>No project boards yet.</p>
+                    <p>Create a board to group tasks from any project into a focused sprint.</p>
+                    <button className={styles.btn} onClick={() => openPbSetup()}>+ Create your first board</button>
+                  </div>
+                ) : (
+                  <>
+                    {/* Active boards grouped by project */}
+                    {projects.map(proj => {
+                      const boards = pbActiveBoards.filter(b => b.projectId === proj.id);
+                      if (boards.length === 0) return null;
+                      if (pbFilterProjectId !== "all" && pbFilterProjectId !== proj.id) return null;
+                      return (
+                        <div key={proj.id} className={styles.pbProjectGroup}>
+                          <div className={styles.pbProjectGroupHeader}>{proj.name}</div>
+                          <div className={styles.pbBoardGrid}>
+                            {boards.map(board => {
+                              const boardTasks = board.taskIds.map(id => state.tasks.find(t => t.id === id)).filter(Boolean) as Task[];
+                              const doneCount = boardTasks.filter(t => t.done).length;
+                              return (
+                                <div key={board.id} className={styles.pbBoardCard} onClick={() => openPbDetail(board.id)}>
+                                  <div className={styles.pbBoardCardName}>{board.name}</div>
+                                  <div className={styles.pbBoardCardMeta}>
+                                    <span>{board.date}</span>
+                                    <span>{doneCount}/{boardTasks.length} done</span>
+                                  </div>
+                                  <div className={styles.pbBoardCardBar}>
+                                    <div className={styles.pbBoardCardBarFill} style={{ width: boardTasks.length ? `${(doneCount / boardTasks.length) * 100}%` : "0%" }} />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                            <div className={styles.pbBoardCardNew} onClick={() => openPbSetup(proj.id)}>+ New board</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Wrapped/archived boards */}
+                    {pbWrappedBoards.filter(b => pbFilterProjectId === "all" || b.projectId === pbFilterProjectId).length > 0 && (
+                      <div className={styles.pbProjectGroup}>
+                        <button className={styles.pbShowWrappedBtn} onClick={() => setPbShowWrapped(o => !o)}>
+                          {pbShowWrapped ? "▲" : "▼"} Wrapped boards ({pbWrappedBoards.filter(b => pbFilterProjectId === "all" || b.projectId === pbFilterProjectId).length})
+                        </button>
+                        {pbShowWrapped && (
+                          <div className={styles.pbBoardGrid}>
+                            {pbWrappedBoards.filter(b => pbFilterProjectId === "all" || b.projectId === pbFilterProjectId).map(board => {
+                              const proj = projects.find(p => p.id === board.projectId);
+                              const boardTasks = board.taskIds.map(id => state.tasks.find(t => t.id === id)).filter(Boolean) as Task[];
+                              const doneCount = boardTasks.filter(t => t.done).length;
+                              return (
+                                <div key={board.id} className={`${styles.pbBoardCard} ${styles.pbBoardCardWrapped}`} onClick={() => openPbDetail(board.id)}>
+                                  <div className={styles.pbBoardCardName}>{board.name}</div>
+                                  <div className={styles.pbBoardCardMeta}>
+                                    <span className={styles.pbBoardCardProject}>{proj?.name}</span>
+                                    <span>{board.date}</span>
+                                    <span>{doneCount}/{boardTasks.length} done</span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* ── Detail view ── */}
+            {pbView === "detail" && selectedBoard && (() => {
+              const boardTasks = selectedBoard.taskIds
+                .map(id => state.tasks.find(t => t.id === id))
+                .filter(Boolean) as Task[];
+              const doneCount = boardTasks.filter(t => t.done).length;
+              const proj = projects.find(p => p.id === selectedBoard.projectId);
+
+              return (
+                <div className={styles.pbDetailPage}>
+                  {/* Header */}
+                  <div className={styles.pbDetailHeader}>
+                    <button className={styles.pbBackBtn} onClick={() => { setPbView("list"); setPbWrapMode(false); }}>← Boards</button>
+                    <div className={styles.pbDetailTitleRow}>
+                      {pbRenamingId === selectedBoard.id ? (
+                        <input
+                          className={styles.pbRenameInput}
+                          autoFocus
+                          value={pbRenameDraft}
+                          onChange={e => setPbRenameDraft(e.target.value)}
+                          onBlur={() => savePbRename(selectedBoard.id)}
+                          onKeyDown={e => { if (e.key === "Enter") savePbRename(selectedBoard.id); if (e.key === "Escape") setPbRenamingId(null); }}
+                        />
+                      ) : (
+                        <h2 className={styles.pbDetailTitle} onClick={() => { setPbRenamingId(selectedBoard.id); setPbRenameDraft(selectedBoard.name); }}>{selectedBoard.name}</h2>
+                      )}
+                      <span className={styles.pbDetailProject}>{proj?.name}</span>
+                    </div>
+                    <div className={styles.pbDetailMeta}>
+                      {pbEditingDate === selectedBoard.id ? (
+                        <input
+                          type="date"
+                          className={styles.input}
+                          autoFocus
+                          value={pbDateDraft}
+                          onChange={e => setPbDateDraft(e.target.value)}
+                          onBlur={() => savePbDate(selectedBoard.id)}
+                          onKeyDown={e => { if (e.key === "Enter") savePbDate(selectedBoard.id); if (e.key === "Escape") setPbEditingDate(null); }}
+                        />
+                      ) : (
+                        <button className={styles.pbDateBtn} onClick={() => { setPbEditingDate(selectedBoard.id); setPbDateDraft(selectedBoard.date); }}>{selectedBoard.date}</button>
+                      )}
+                      <span className={styles.pbDetailProgress}>{doneCount}/{boardTasks.length} done</span>
+                      {selectedBoard.wrapped && <span className={styles.pbWrappedBadge}>✓ Wrapped</span>}
+                    </div>
+                    {/* Progress bar */}
+                    <div className={styles.pbDetailBar}>
+                      <div className={styles.pbDetailBarFill} style={{ width: boardTasks.length ? `${(doneCount / boardTasks.length) * 100}%` : "0%" }} />
+                    </div>
+                    {/* Actions */}
+                    {!selectedBoard.wrapped && (
+                      <div className={styles.pbDetailActions}>
+                        {!pbWrapMode && <button className={styles.btnOutline} onClick={openPbWrapUp}>Wrap up board</button>}
+                        <button className={`${styles.deleteBtn}`} onClick={() => { if (window.confirm("Delete this board?")) deletePb(selectedBoard.id); }} title="Delete board">🗑</button>
+                      </div>
+                    )}
+                    {selectedBoard.wrapped && (
+                      <div className={styles.pbDetailActions}>
+                        <button className={`${styles.deleteBtn}`} onClick={() => { if (window.confirm("Delete this board?")) deletePb(selectedBoard.id); }} title="Delete board">🗑</button>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Wrap-up panel */}
+                  {pbWrapMode && (
+                    <div className={styles.wrapPanel}>
+                      <div className={styles.wrapPanelHeader}>
+                        <span className={styles.wrapPanelTitle}>Wrap up "{selectedBoard.name}"</span>
+                        <button className={styles.subtaskCancelBtn} onClick={() => setPbWrapMode(false)}>Cancel</button>
+                      </div>
+                      <p className={styles.wrapPanelSub}>Mark incomplete tasks as resolved or carry them over.</p>
+                      {boardTasks.filter(t => !t.done).map(task => {
+                        const isResolve = pbWrapResolveIds.has(task.id);
+                        const isCarry = pbWrapCarryIds.has(task.id);
+                        const pClass = task.priority === "High" ? styles.priorityHigh : task.priority === "Medium" ? styles.priorityMedium : styles.priorityLow;
+                        return (
+                          <div key={task.id} className={styles.wrapItem}>
+                            <span className={`${styles.priority} ${pClass}`}>{task.priority}</span>
+                            <span className={styles.wrapItemTitle}>{task.title}</span>
+                            <button className={`${styles.wrapBtn} ${isResolve ? styles.wrapBtnActive : ""}`}
+                              onClick={() => { togglePbWrapId(setPbWrapResolveIds, task.id); if (!isResolve) setPbWrapCarryIds(prev => { const n = new Set(prev); n.delete(task.id); return n; }); }}>
+                              ✓ Resolve
+                            </button>
+                            <button className={`${styles.wrapBtn} ${isCarry ? styles.wrapBtnCarry : ""}`}
+                              onClick={() => { togglePbWrapId(setPbWrapCarryIds, task.id); if (!isCarry) setPbWrapResolveIds(prev => { const n = new Set(prev); n.delete(task.id); return n; }); }}>
+                              → Carry
+                            </button>
+                          </div>
+                        );
+                      })}
+                      {boardTasks.filter(t => !t.done).length === 0 && (
+                        <p className={styles.empty}>All tasks are done — ready to wrap up!</p>
+                      )}
+                      <div className={styles.wrapPanelFooter}>
+                        <button className={styles.btn} onClick={confirmPbWrapUp}>Confirm wrap-up</button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Task list */}
+                  {!pbWrapMode && (
+                    <ul className={styles.pbTaskList}>
+                      {boardTasks.length === 0 && <p className={styles.empty}>No tasks on this board.</p>}
+                      {boardTasks.map(task => {
+                        const pClass = task.priority === "High" ? styles.priorityHigh : task.priority === "Medium" ? styles.priorityMedium : styles.priorityLow;
+                        const notesLocked = isTaskNotesLocked(task);
+                        return (
+                          <li key={task.id} className={`${styles.pbTaskItem} ${task.done ? styles.pbTaskItemDone : ""}`}>
+                            <button
+                              className={`${styles.checkBtn} ${task.done ? styles.checked : ""}`}
+                              onClick={() => togglePbTaskDone(task.id)}
+                              title={task.done ? "Mark active" : "Mark done"}
+                            >{task.done ? "✓" : ""}</button>
+                            <div className={styles.pbTaskBody}>
+                              <span className={styles.pbTaskTitle}>{task.title}</span>
+                              <div className={styles.taskMeta}>
+                                <span className={`${styles.priority} ${pClass}`}>{task.priority}</span>
+                                {task.eta && <span className={styles.eta}>due {task.eta}</span>}
+                              </div>
+                              {task.notes && !notesLocked && (
+                                <div className={styles.pbTaskNotes}>{task.notes.split("\n")[0]}</div>
+                              )}
+                              {task.notes && notesLocked && (
+                                <div className={styles.notesLockedHint} onClick={() => openLockDialog(task.projectId, "unlock", task.id)}>
+                                  🔒 Notes hidden — click to unlock
+                                </div>
+                              )}
+                            </div>
+                            {!selectedBoard.wrapped && (
+                              <button className={styles.deleteBtn} onClick={() => togglePbTask(task.id)} title="Remove from board">×</button>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                </div>
+              );
+            })()}
+          </>
+        )}
+
         {/* ── Topics ── */}
         {tab === "topics" && (
           <>
@@ -2494,16 +2924,44 @@ export default function Home() {
                       <span className={styles.projectListCount}>{state.tasks.filter(t => t.projectId === p.id).length} tasks</span>
                       {/* Lock controls */}
                       {isPrivate && isLocked && (
-                        <button className={styles.btnSmall} onClick={() => openLockDialog(p.id, "unlock")} title="Unlock project">Unlock</button>
+                        <button className={styles.btnSmall} onClick={() => openLockDialog(p.id, "unlock")} title="Reveal all notes">Show notes</button>
                       )}
                       {isPrivate && !isLocked && (
                         <>
-                          <button className={styles.btnSmall} onClick={() => handleLockProject(p.id)} title="Lock project">Lock</button>
+                          <button className={styles.btnSmall} onClick={() => handleLockProject(p.id)} title="Lock notes">Lock</button>
                           <button className={styles.btnSmall} onClick={() => openLockDialog(p.id, "changePassword")} title="Change password">Password</button>
                         </>
                       )}
                       {!isPrivate && (
                         <button className={styles.btnSmall} onClick={() => openLockDialog(p.id, "setPassword")} title="Add password lock">+ Lock</button>
+                      )}
+                      {/* Per-project notes expiry (only shown for locked projects) */}
+                      {isPrivate && (
+                        <div className={styles.projectLockExpiry}>
+                          <span className={styles.projectLockExpiryLabel}>Notes expire after</span>
+                          <select
+                            className={styles.selectXs}
+                            value={p.lockSessionDays ?? ""}
+                            onChange={async e => {
+                              const val = e.target.value;
+                              const updated = state.projects.map(proj =>
+                                proj.id === p.id
+                                  ? { ...proj, lockSessionDays: val === "" ? undefined : Number(val) }
+                                  : proj
+                              );
+                              await persist({ ...state, projects: updated });
+                            }}
+                          >
+                            <option value="">Use default</option>
+                            <option value={0.042}>1 hour</option>
+                            <option value={0.25}>6 hours</option>
+                            <option value={0.5}>12 hours</option>
+                            <option value={1}>1 day</option>
+                            <option value={3}>3 days</option>
+                            <option value={7}>1 week</option>
+                            <option value={30}>30 days</option>
+                          </select>
+                        </div>
                       )}
                       <button className={styles.deleteBtn} onClick={() => handleDeleteProject(p.id)} title="Delete project">×</button>
                     </li>
@@ -2511,9 +2969,9 @@ export default function Home() {
                 })}
               </ul>
 
-              {/* Lock session expiry */}
+              {/* Default lock session expiry (applies to locked projects that don't have per-project override) */}
               <div className={styles.lockSessionRow}>
-                <span className={styles.lockSessionLabel}>🔒 Unlock session expires after</span>
+                <span className={styles.lockSessionLabel}>🔒 Default notes-unlock expires after</span>
                 <select
                   className={styles.select}
                   value={state.settings?.lockSessionDays ?? 1}
@@ -2531,7 +2989,7 @@ export default function Home() {
                   <option value={7}>1 week</option>
                   <option value={30}>30 days</option>
                 </select>
-                <span className={styles.lockSessionNote}>After this time, locked projects will require the password again.</span>
+                <span className={styles.lockSessionNote}>Applied to locked projects without a per-project override.</span>
               </div>
             </section>
 
@@ -2671,6 +3129,8 @@ export default function Home() {
       {lockDialog && (() => {
         const proj = state?.projects.find(p => p.id === lockDialog.projectId);
         const mode = lockDialog.mode;
+        const isPerTask = !!lockDialog.taskId;
+        const taskForUnlock = isPerTask ? state?.tasks.find(t => t.id === lockDialog.taskId) : null;
         return (
           <div className={styles.lockOverlay} onClick={() => setLockDialog(null)}>
             <div className={styles.lockModal} onClick={e => e.stopPropagation()}>
@@ -2680,14 +3140,16 @@ export default function Home() {
                 </span>
                 <div>
                   <h3 className={styles.lockModalTitle}>
-                    {mode === "unlock" && `Unlock "${proj?.name}"`}
+                    {mode === "unlock" && isPerTask && `Unlock notes — "${taskForUnlock?.title ?? "task"}"`}
+                    {mode === "unlock" && !isPerTask && `Show all notes — "${proj?.name}"`}
                     {mode === "setPassword" && `Lock "${proj?.name}"`}
                     {mode === "changePassword" && `Change password — "${proj?.name}"`}
                     {mode === "forgot" && `Forgot password — "${proj?.name}"`}
                     {mode === "verifyOtp" && "Enter verification code"}
                   </h3>
-                  {mode === "setPassword" && <p className={styles.lockModalSub}>Create a password to hide this project&apos;s tasks until unlocked.</p>}
-                  {mode === "unlock" && <p className={styles.lockModalSub}>Enter your password to access this project.</p>}
+                  {mode === "setPassword" && <p className={styles.lockModalSub}>Create a password to protect this project&apos;s notes. Task titles remain visible.</p>}
+                  {mode === "unlock" && isPerTask && <p className={styles.lockModalSub}>Enter the project password to reveal notes for this task.</p>}
+                  {mode === "unlock" && !isPerTask && <p className={styles.lockModalSub}>Enter the project password to reveal notes for all tasks in &quot;{proj?.name}&quot;.</p>}
                 </div>
                 <button className={styles.lockModalClose} onClick={() => setLockDialog(null)}>×</button>
               </div>
@@ -2700,7 +3162,7 @@ export default function Home() {
                     onKeyDown={e => e.key === "Enter" && handleUnlockProject()} />
                   {lockError && <div className={styles.lockError}>{lockError}</div>}
                   <div className={styles.lockModalActions}>
-                    <button className={styles.btn} onClick={handleUnlockProject}>Unlock</button>
+                    <button className={styles.btn} onClick={handleUnlockProject}>{isPerTask ? "Unlock notes" : "Show all notes"}</button>
                     <button className={styles.linkBtn} onClick={() => setLockDialog({ ...lockDialog, mode: "forgot" })}>Forgot password?</button>
                   </div>
                 </div>

@@ -322,6 +322,42 @@
   color: rgba(255,255,255,0.36);
   font-weight: 500;
 }
+
+.sidebarProjectRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sidebarProjectRow .sidebarProject {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebarBoardsBtn {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.3);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 4px 6px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+.sidebarBoardsBtn:hover { background: rgba(255,255,255,0.09); color: rgba(255,255,255,0.8); }
+.sidebarBoardsBtnActive { color: rgba(255,255,255,0.9) !important; background: rgba(255,255,255,0.12) !important; }
+
+.sidebarBoardsBadge {
+  font-size: 0.65rem;
+  background: rgba(255,255,255,0.2);
+  border-radius: 99px;
+  padding: 0 4px;
+  color: #fff;
+}
 .sidebarProjectActive .sidebarProjectCount { color: rgba(255,255,255,0.7); }
 
 .sidebarSaving {
@@ -351,14 +387,39 @@
 
 .addForm {
   display: flex;
+  flex-direction: column;
   gap: 8px;
   margin-bottom: 20px;
-  flex-wrap: wrap;
   padding: 14px 16px;
   background: var(--surface);
   border: none;
   border-radius: var(--radius);
   box-shadow: var(--shadow-card);
+}
+
+.addFormInput {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  background: var(--surface-raised);
+  color: var(--text);
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.addFormInput:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--surface);
+}
+.addFormInput::placeholder { color: var(--text-muted); }
+
+.addFormControls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .input {
@@ -2222,6 +2283,7 @@
   background: var(--surface-raised);
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 
 .projectDot {
@@ -2917,6 +2979,80 @@
   opacity: 0.85;
 }
 
+/* ─── Notes locked state ─────────────────────────────────────────────────── */
+
+.notesBtnLocked {
+  opacity: 0.75;
+}
+
+.notesLockedHint {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  cursor: pointer;
+  margin-top: 4px;
+  transition: color 0.15s, background 0.15s;
+}
+.notesLockedHint:hover {
+  color: var(--text-secondary);
+  background: var(--surface-deep);
+}
+
+.notesLockedMsg {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  padding: 8px 10px;
+  background: var(--surface-raised);
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border);
+}
+
+.notesLockedBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  background: var(--surface-raised);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: 0.83rem;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+/* ─── Per-project lock expiry row ────────────────────────────────────────── */
+
+.projectLockExpiry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 4px 10px;
+  background: var(--surface-deep);
+  border-radius: var(--radius-sm);
+  width: 100%;
+  flex-basis: 100%;
+}
+
+.projectLockExpiryLabel {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.selectXs {
+  font-size: 0.76rem;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
 /* ─── Task creation form notes field ─────────────────────────────────────── */
 
 .addFormRow {
@@ -2973,24 +3109,428 @@
 
 /* ─── Archived task row ──────────────────────────────────────────────────── */
 
-.taskArchived {
-  opacity: 0.65;
-  background: var(--surface-raised);
-  border-left: 3px solid var(--text-muted) !important;
+/* ─── Archived item card ─────────────────────────────────────────────────── */
+
+.archivedItem {
   display: flex;
   align-items: center;
   gap: 12px;
   justify-content: space-between;
+  background: var(--surface);
+  border-left: 4px solid var(--text-muted);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 10px 14px;
+  opacity: 0.7;
+  transition: opacity 0.15s;
 }
+.archivedItem:hover { opacity: 1; }
 
-.taskArchived .taskMain {
+.archivedItemLeft {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
-.taskArchived .taskActions {
+.archivedItemTitle {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.archivedItemMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.archivedItemProject {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--surface-deep);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.archivedItemDate {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+}
+
+.archivedItemPrio {
+  font-size: 0.7rem;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.archivedPrioHigh   { background: #fee2e2; color: #b91c1c; }
+.archivedPrioMedium { background: #fef3c7; color: #92400e; }
+.archivedPrioLow    { background: #d1fae5; color: #065f46; }
+
+.archivedItemNotes {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.archivedItemActions {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-shrink: 0;
+}
+
+.deleteBtnSm {
+  background: none;
+  border: none;
+  font-size: 1rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 4px 6px;
+  border-radius: var(--radius-sm);
+  transition: color 0.12s, background 0.12s;
+}
+.deleteBtnSm:hover { color: #ef4444; background: #fee2e2; }
+
+/* ─── Project Boards ──────────────────────────────────────────────────────── */
+
+.pbSetupMeta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.pbSetupMeta .input, .pbSetupMeta .select { flex: 1; min-width: 140px; }
+
+.pbSetupBulk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.82rem;
+}
+
+.pbListPage {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.pbListHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pbListTitle {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+
+.pbEmpty {
+  text-align: center;
+  padding: 40px 20px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+.pbProjectGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pbProjectGroupHeader {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 0 2px;
+}
+
+.pbBoardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.pbBoardCard {
+  background: var(--surface-raised);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.pbBoardCard:hover {
+  box-shadow: var(--shadow-hover);
+  border-color: var(--border-strong);
+}
+
+.pbBoardCardWrapped {
+  opacity: 0.65;
+}
+
+.pbBoardCardName {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pbBoardCardMeta {
+  display: flex;
+  gap: 8px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.pbBoardCardProject {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.pbBoardCardBar {
+  height: 4px;
+  background: var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.pbBoardCardBarFill {
+  height: 100%;
+  background: var(--accent-blue);
+  border-radius: 99px;
+  transition: width 0.3s;
+}
+
+.pbBoardCardNew {
+  border: 1.5px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  transition: border-color 0.15s, color 0.15s;
+}
+.pbBoardCardNew:hover { border-color: var(--border-strong); color: var(--text-secondary); }
+
+.pbShowWrappedBtn {
+  background: none;
+  border: none;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 0;
+  text-align: left;
+}
+.pbShowWrappedBtn:hover { color: var(--text-secondary); }
+
+/* Detail view */
+
+.pbDetailPage {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.pbDetailHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1.5px solid var(--border);
+}
+
+.pbBackBtn {
+  background: none;
+  border: none;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+  width: fit-content;
+}
+.pbBackBtn:hover { color: var(--text); }
+
+.pbDetailTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pbDetailTitle {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+  cursor: pointer;
+}
+.pbDetailTitle:hover { color: var(--accent-blue); }
+
+.pbDetailProject {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  background: var(--surface-deep);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+
+.pbDetailMeta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+}
+
+.pbDateBtn {
+  background: none;
+  border: none;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline dotted;
+}
+.pbDateBtn:hover { color: var(--text); }
+
+.pbDetailProgress {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.pbWrappedBadge {
+  background: #d1fae5;
+  color: #065f46;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.pbDetailBar {
+  height: 6px;
+  background: var(--border);
+  border-radius: 99px;
+  overflow: hidden;
+}
+
+.pbDetailBarFill {
+  height: 100%;
+  background: var(--accent-blue);
+  border-radius: 99px;
+  transition: width 0.3s;
+}
+
+.pbDetailActions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.pbRenameInput {
+  font-size: 1.1rem;
+  font-weight: 700;
+  background: var(--surface-raised);
+  border: 1.5px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  color: var(--text);
+  width: 100%;
+  max-width: 360px;
+}
+
+.pbTaskList {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pbTaskItem {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: opacity 0.15s;
+}
+
+.pbTaskItemDone {
+  opacity: 0.55;
+}
+
+.pbTaskBody {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pbTaskTitle {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.pbTaskNotes {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Project boards shortcut (Tasks tab) ────────────────────────────────── */
+
+.projectBoardsShortcut {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  background: var(--surface-raised);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+
+.projectBoardsShortcutLabel {
+  flex: 1;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
 }

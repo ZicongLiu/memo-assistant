@@ -1,0 +1,36 @@
+# fly.toml — FlowDesk on Fly.io
+# Replace "flowdesk-app" with your actual app name after running `fly launch`
+
+app = "flowdesk-app"
+primary_region = "sjc"   # San Jose — change to your preferred region (e.g. "lax", "sea", "ord")
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NEXT_PUBLIC_APP_ENABLED = "true"
+  NODE_ENV = "production"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/storage?key=healthcheck"
+    timeout = "10s"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+
+[mounts]
+  source = "flowdesk_data"
+  destination = "/app/data"

@@ -1,0 +1,15 @@
+node_modules
+.next
+.next-pm2
+.env*
+data/
+logs/
+.git
+.gitignore
+.claude/
+coverage/
+*.tsbuildinfo
+README.md
+BACKLOG.md
+PM2.md
+ecosystem.config.js
