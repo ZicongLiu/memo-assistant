@@ -1262,7 +1262,10 @@ export default function Home() {
               title={notesLocked ? "Notes locked — click to unlock" : node.notes ? "Edit notes" : "Add notes"}
             >{notesLocked ? "🔒" : "✏️"}</button>
             <button className={styles.subAddChildBtn}
-              onClick={() => setAddingSubFor({ taskId, parentNodeId: node.id })}
+              onClick={() => {
+                setCollapsedNodes(prev => { const n = new Set(prev); n.delete(node.id); return n; });
+                setAddingSubFor({ taskId, parentNodeId: node.id });
+              }}
               title="Add child subtask">+</button>
             <button className={styles.deleteBtn}
               onClick={() => handleDeleteSubtask(taskId, node.id)}>×</button>
@@ -2169,7 +2172,9 @@ export default function Home() {
                           </div>
                           {/* Inline subtask nodes on board — expanded when toggled */}
                           {boardSubExpanded.has(task.id) && (
-                            <div className={styles.boardSubList}>
+                            <div className={styles.boardSubList}
+                              onDrop={e => { if (subDragNodeId.current) handleSubDrop(e, task.id); }}
+                              onDragOver={e => { if (subDragNodeId.current) e.preventDefault(); }}>
                               {renderSubtree(taskSubtasks, task.id, 0)}
                               {addingSubFor?.taskId === task.id && addingSubFor.parentNodeId === null ? (
                                 <div className={styles.subtaskAddRow}>

@@ -1595,6 +1595,7 @@
   transition: opacity 0.1s, color 0.1s, background 0.1s;
 }
 .subtaskRow:hover .subAddChildBtn { opacity: 1; }
+.boardSubList .subAddChildBtn { opacity: 1; }
 .subAddChildBtn:hover { color: var(--text); background: var(--surface-deep); }
 
 /* ─── Notes button ───────────────────────────────────────────────────────── */
