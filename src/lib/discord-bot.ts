@@ -60,16 +60,49 @@ async function callGroq(prompt: string): Promise<string> {
 }
 
 // ─── Daily digest ─────────────────────────────────────────────────────────────
+function getLocalDateStr(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function daysUntilEta(eta: unknown, today: string): number | null {
+  if (!eta || typeof eta !== "string") return null;
+  const etaMs = new Date(eta).getTime();
+  const todayMs = new Date(today).getTime();
+  return Math.round((etaMs - todayMs) / 86400000);
+}
+
 async function sendDigest(channel: TextChannel, filters: { projectFilter?: string | null; priorityFilter?: string } = {}) {
   const state = getState();
   if (!state) { await channel.send("⚠️ No data found."); return; }
 
   const allTasks = (state.tasks || []) as Record<string, unknown>[];
   const projects = (state.projects || []) as Record<string, unknown>[];
+  const etaWarningDays = (state.settings as Record<string, unknown> | undefined)?.etaWarningDays as number ?? 3;
+  const today = getLocalDateStr();
 
   let active = allTasks.filter(t => !t.done);
   if (filters.projectFilter) active = active.filter(t => t.projectId === filters.projectFilter || (t.tagProjectIds as string[] ?? []).includes(filters.projectFilter!));
   if (filters.priorityFilter && filters.priorityFilter !== "All") active = active.filter(t => t.priority === filters.priorityFilter);
+
+  // ── Due Soon block ──────────────────────────────────────────────────────────
+  const dueSoon = active
+    .map(t => ({ t, d: daysUntilEta(t.eta, today) }))
+    .filter(({ d }) => d !== null && d <= etaWarningDays)
+    .sort((a, b) => (a.d ?? 999) - (b.d ?? 999));
+
+  if (dueSoon.length > 0) {
+    const lines = dueSoon.map(({ t, d }) => {
+      const label = d! < 0 ? `⚠️ **OVERDUE** by ${Math.abs(d!)}d` : d === 0 ? "🔴 **DUE TODAY**" : `🔴 due in **${d}d**`;
+      return `• [${t.priority}] ${t.title} — ${label}`;
+    }).join("\n");
+    await channel.send(`🚨 **Due Soon (within ${etaWarningDays} days)**\n${lines}`);
+  }
+
+  // ── AI summary ──────────────────────────────────────────────────────────────
   const overallPrompt = `You are a productivity assistant. Summarize these active tasks for a daily digest:\n${
     active.map(t => `- [${t.priority}] ${t.title}${t.eta ? ` (due ${t.eta})` : ""}`).join("\n") || "No active tasks."
   }\n\nBe concise, motivating, max 200 words.`;

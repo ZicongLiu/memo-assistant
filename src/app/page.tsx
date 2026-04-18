@@ -71,7 +71,7 @@ interface BotJob {
   projectFilter?: string | null;      // null = all projects
   priorityFilter?: "All" | "High" | "Medium" | "Low";
 }
-interface Settings { jobs: BotJob[]; lockSessionDays?: number; }
+interface Settings { jobs: BotJob[]; lockSessionDays?: number; etaWarningDays?: number; }
 interface HubState {
   tasks: Task[];
   projects: Project[];
@@ -180,17 +180,41 @@ async function hashPassword(password: string, salt: string): Promise<string> {
 // ─── Board sort helpers (module-level so initial load can use them) ───────────
 
 const BOARD_PRIO = { High: 3, Medium: 2, Low: 1 } as Record<string, number>;
-function sortedBoardTaskIds(taskIds: string[], tasks: Task[]): string[] {
+function sortedBoardTaskIds(taskIds: string[], tasks: Task[], today = "", warningDays = 3): string[] {
   return [...taskIds].sort((a, b) => {
     const ta = tasks.find(t => t.id === a);
     const tb = tasks.find(t => t.id === b);
     if (!ta || !tb) return 0;
     if (ta.done !== tb.done) return ta.done ? 1 : -1;
+    // ETA-imminent tasks float to top (before priority sort)
+    const aImminent = today ? isEtaImminent(ta, today, warningDays) : false;
+    const bImminent = today ? isEtaImminent(tb, today, warningDays) : false;
+    if (aImminent !== bImminent) return aImminent ? -1 : 1;
+    // Within imminent: sort by soonest ETA first
+    if (aImminent && bImminent) {
+      const da = daysUntilEta(ta.eta, today) ?? 999;
+      const db = daysUntilEta(tb.eta, today) ?? 999;
+      if (da !== db) return da - db;
+    }
     return (BOARD_PRIO[tb.priority] ?? 0) - (BOARD_PRIO[ta.priority] ?? 0);
   });
 }
-function withSortedTodayBoard(boards: DailyBoard[], tasks: Task[], today: string): DailyBoard[] {
-  return boards.map(b => b.date === today ? { ...b, taskIds: sortedBoardTaskIds(b.taskIds, tasks) } : b);
+function withSortedTodayBoard(boards: DailyBoard[], tasks: Task[], today: string, warningDays = 3): DailyBoard[] {
+  return boards.map(b => b.date === today ? { ...b, taskIds: sortedBoardTaskIds(b.taskIds, tasks, today, warningDays) } : b);
+}
+
+/** Returns days until task's ETA. Negative = overdue. Null if no ETA set. */
+function daysUntilEta(eta: string | undefined, today: string): number | null {
+  if (!eta) return null;
+  const etaMs = new Date(eta).getTime();
+  const todayMs = new Date(today).getTime();
+  return Math.round((etaMs - todayMs) / 86400000);
+}
+
+/** True if task ETA is within warningDays (or overdue). */
+function isEtaImminent(task: Task, today: string, warningDays: number): boolean {
+  const d = daysUntilEta(task.eta, today);
+  return d !== null && d <= warningDays;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -238,6 +262,7 @@ export default function Home() {
   const [dailyEditTitle, setDailyEditTitle] = useState("");
   const [dailyEditNotes, setDailyEditNotes] = useState("");
   const [dailyEditParentId, setDailyEditParentId] = useState<string | null>(null);
+  const [dailyEditEta, setDailyEditEta] = useState("");
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [historyTaskExpanded, setHistoryTaskExpanded] = useState<Set<string>>(new Set());
 
@@ -254,6 +279,7 @@ export default function Home() {
   const [taskEditOpenFor, setTaskEditOpenFor] = useState<string | null>(null);
   const [taskEditTitle, setTaskEditTitle] = useState("");
   const [taskEditNotes, setTaskEditNotes] = useState("");
+  const [taskEditEta, setTaskEditEta] = useState("");
   const [notesDraft, setNotesDraft] = useState("");
   const [notesExpandedFor, setNotesExpandedFor] = useState<Set<string>>(new Set());
 
@@ -521,7 +547,7 @@ export default function Home() {
       const updatedTasks = state.tasks.map(t =>
         t.id === taskId ? { ...t, done: false, doneAt: undefined } : t
       );
-      persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr) });
+      persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr, state.settings?.etaWarningDays ?? 3) });
     }
   }
   function confirmComplete(taskId: string, skipOutput = false) {
@@ -529,7 +555,7 @@ export default function Home() {
     const updatedTasks = state.tasks.map(t =>
       t.id === taskId ? { ...t, done: true, doneAt: new Date().toISOString(), output: skipOutput ? t.output : (completionOutput.trim() || t.output) } : t
     );
-    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr) });
+    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr, state.settings?.etaWarningDays ?? 3) });
     setCompletingTaskId(null); setCompletionOutput("");
   }
   function handleDeleteTask(taskId: string) {
@@ -682,12 +708,13 @@ export default function Home() {
     setDailyEditTitle(task.title);
     setDailyEditNotes(task.notes ?? "");
     setDailyEditParentId(task.parentTaskId ?? null);
+    setDailyEditEta(task.eta ?? "");
   }
 
   function saveDailyTaskEdit() {
     if (!state || !dailyEditTaskId || !dailyEditTitle.trim()) { setDailyEditTaskId(null); return; }
     persist({ ...state, tasks: state.tasks.map(t =>
-      t.id === dailyEditTaskId ? { ...t, title: dailyEditTitle.trim(), notes: dailyEditNotes, parentTaskId: dailyEditParentId } : t
+      t.id === dailyEditTaskId ? { ...t, title: dailyEditTitle.trim(), notes: dailyEditNotes, parentTaskId: dailyEditParentId, eta: dailyEditEta } : t
     )});
     setDailyEditTaskId(null);
   }
@@ -997,7 +1024,7 @@ export default function Home() {
     const updatedTasks = task.done
       ? state.tasks.map(t => t.id === taskId ? { ...t, done: false, doneAt: undefined } : t)
       : state.tasks.map(t => t.id === taskId ? { ...t, done: true, doneAt: new Date().toISOString() } : t);
-    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr) });
+    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr, state.settings?.etaWarningDays ?? 3) });
   }
 
   // ── Daily board ───────────────────────────────────────────────────────────────
@@ -1045,11 +1072,11 @@ export default function Home() {
       // Un-wrap it (it's active again) and add any newly selected tasks.
       const existing = new Set(board.taskIds);
       const added = [...dailySetupSelected].filter(id => !existing.has(id));
-      const merged = sortedBoardTaskIds([...board.taskIds, ...added], state.tasks);
+      const merged = sortedBoardTaskIds([...board.taskIds, ...added], state.tasks, todayStr, state.settings?.etaWarningDays ?? 3);
       persist({ ...state, dailyBoards: (state.dailyBoards ?? []).map(b => b.date === todayStr ? { ...b, taskIds: merged, wrapped: false } : b) });
     } else {
       // Genuinely new day — create fresh board.
-      const newBoard: DailyBoard = { date: todayStr, taskIds: sortedBoardTaskIds([...dailySetupSelected], state.tasks), wrapped: false };
+      const newBoard: DailyBoard = { date: todayStr, taskIds: sortedBoardTaskIds([...dailySetupSelected], state.tasks, todayStr, state.settings?.etaWarningDays ?? 3), wrapped: false };
       persist({ ...state, dailyBoards: [...(state.dailyBoards ?? []), newBoard] });
     }
     setDailyAddingMore(false);
@@ -1090,7 +1117,7 @@ export default function Home() {
     if (!state) return;
     const next: "High" | "Medium" | "Low" = current === "High" ? "Medium" : current === "Medium" ? "Low" : "High";
     const updatedTasks = state.tasks.map(t => t.id === taskId ? { ...t, priority: next } : t);
-    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr) });
+    persist({ ...state, tasks: updatedTasks, dailyBoards: withSortedTodayBoard(state.dailyBoards ?? [], updatedTasks, todayStr, state.settings?.etaWarningDays ?? 3) });
   }
 
   function removeDailyTask(taskId: string) {
@@ -1160,7 +1187,7 @@ export default function Home() {
     };
     const allTasks = [...state.tasks, task];
     const updatedBoards = (state.dailyBoards ?? []).map(b =>
-      b.date === todayStr ? { ...b, taskIds: sortedBoardTaskIds([...b.taskIds, id], allTasks) } : b
+      b.date === todayStr ? { ...b, taskIds: sortedBoardTaskIds([...b.taskIds, id], allTasks, todayStr, state.settings?.etaWarningDays ?? 3) } : b
     );
     persist({ ...state, tasks: allTasks, dailyBoards: updatedBoards });
     setBoardQuickTitle(""); setBoardQuickShow(false);
@@ -1176,13 +1203,14 @@ export default function Home() {
     setTaskEditOpenFor(task.id);
     setTaskEditTitle(task.title);
     setTaskEditNotes(task.notes ?? "");
+    setTaskEditEta(task.eta ?? "");
     setNotesOpenFor(null); // close standalone notes panel if open
   }
 
   function saveTaskEdit(taskId: string) {
     if (!state || !taskEditTitle.trim()) { setTaskEditOpenFor(null); return; }
     persist({ ...state, tasks: state.tasks.map(t =>
-      t.id === taskId ? { ...t, title: taskEditTitle.trim(), notes: taskEditNotes } : t
+      t.id === taskId ? { ...t, title: taskEditTitle.trim(), notes: taskEditNotes, eta: taskEditEta } : t
     )});
     setTaskEditOpenFor(null);
   }
@@ -1373,7 +1401,20 @@ export default function Home() {
   const tasks = topLevelTasks
     .filter(t => filterDone ? t.done : !t.done)
     .filter(t => filterProject === "all" || t.projectId === filterProject)
-    .filter(t => !taskSearch || t.title.toLowerCase().includes(taskSearchLower) || (!isTaskNotesLocked(t) && (t.notes ?? "").toLowerCase().includes(taskSearchLower)));
+    .filter(t => !taskSearch || t.title.toLowerCase().includes(taskSearchLower) || (!isTaskNotesLocked(t) && (t.notes ?? "").toLowerCase().includes(taskSearchLower)))
+    .sort((a, b) => {
+      // When viewing a single project: float ETA-imminent tasks to top
+      if (filterProject === "all") return 0;
+      const aIm = isEtaImminent(a, todayStr, etaWarningDays);
+      const bIm = isEtaImminent(b, todayStr, etaWarningDays);
+      if (aIm !== bIm) return aIm ? -1 : 1;
+      if (aIm && bIm) {
+        const da = daysUntilEta(a.eta, todayStr) ?? 999;
+        const db = daysUntilEta(b.eta, todayStr) ?? 999;
+        if (da !== db) return da - db;
+      }
+      return 0; // preserve original order otherwise
+    });
 
   const activeTasks = state.tasks.filter(t => !t.done && !t.archived);
 
@@ -1414,7 +1455,17 @@ export default function Home() {
               {projects.find(p => p.id === task.projectId) && (
                 <span className={styles.project}>{projects.find(p => p.id === task.projectId)!.name}</span>
               )}
-              {task.eta && <span className={styles.eta}>due {task.eta}</span>}
+              {task.eta && (() => {
+                const d = daysUntilEta(task.eta, todayStr);
+                const ov = d !== null && d < 0;
+                const im = d !== null && d <= etaWarningDays;
+                return (
+                  <span className={`${styles.eta} ${ov ? styles.etaOverdue : im ? styles.etaImminent : ""}`} title={ov ? `Overdue by ${Math.abs(d!)}d` : im ? `Due in ${d}d` : ""}>
+                    {ov ? "⚠️ " : im ? "🔴 " : ""}due {task.eta}
+                    {ov ? ` (${Math.abs(d!)}d overdue)` : im && d === 0 ? " (today!)" : im ? ` (${d}d left)` : ""}
+                  </span>
+                );
+              })()}
               <span className={styles.date}>{task.createdAt}</span>
             </div>
           </div>
@@ -1562,6 +1613,16 @@ export default function Home() {
                   />
                 )}
               </div>
+              <div className={styles.taskEditField}>
+                <label className={styles.taskEditLabel}>Need by date</label>
+                <input
+                  type="date"
+                  className={styles.taskEditInput}
+                  value={taskEditEta}
+                  onChange={e => setTaskEditEta(e.target.value)}
+                  onClick={e => e.stopPropagation()}
+                />
+              </div>
               <div className={styles.taskEditActions}>
                 <button className={styles.subtaskAddBtn} onClick={e => { e.stopPropagation(); saveTaskEdit(task.id); }}>Save</button>
                 <button className={styles.subtaskCancelBtn} onClick={e => { e.stopPropagation(); setTaskEditOpenFor(null); }}>Cancel</button>
@@ -1608,6 +1669,7 @@ export default function Home() {
   }
   const topics = state.learningTopics ?? [];
   const projects = state.projects ?? [];
+  const etaWarningDays = state.settings?.etaWarningDays ?? 3;
   const todayBoard = state.dailyBoards?.find(b => b.date === todayStr) ?? null;
   const boardTaskObjects = (todayBoard?.taskIds ?? [])
     .map(id => state.tasks.find(t => t.id === id))
@@ -1630,7 +1692,7 @@ export default function Home() {
     }
   }
   const prio = { High: 3, Medium: 2, Low: 1 } as Record<string, number>;
-  const isSetupSuggested = (t: Task) => t.priority === "High" || (t.dailyRank ?? 0) > 0;
+  const isSetupSuggested = (t: Task) => t.priority === "High" || (t.dailyRank ?? 0) > 0 || isEtaImminent(t, todayStr, etaWarningDays);
   const setupSearchLower = dailySetupSearch.toLowerCase();
   const matchesSetupSearch = (t: Task) =>
     !dailySetupSearch || t.title.toLowerCase().includes(setupSearchLower) || (t.notes ?? "").toLowerCase().includes(setupSearchLower);
@@ -2117,10 +2179,13 @@ export default function Home() {
                     const taskSubtasks = task.subtasks ?? [];
                     const totalSubCount = countNodes(taskSubtasks);
                     const doneSubCount = countDoneNodes(taskSubtasks);
+                    const etaDays = daysUntilEta(task.eta, todayStr);
+                    const etaImminent = etaDays !== null && etaDays <= etaWarningDays;
+                    const etaOverdue = etaDays !== null && etaDays < 0;
                     return (
                       <Fragment key={task.id}>
                         {dailyDragOverId === task.id && dailyDragOverPos === "before" && <div className={styles.dailyDropLine} />}
-                        <div className={`${styles.dailyBoardCard} ${dailyEditTaskId === task.id ? styles.dailyBoardCardEditing : ""}`}>
+                        <div className={`${styles.dailyBoardCard} ${dailyEditTaskId === task.id ? styles.dailyBoardCardEditing : ""} ${etaOverdue ? styles.dailyBoardCardOverdue : etaImminent ? styles.dailyBoardCardImminent : ""}`}>
                           <div
                             className={`${styles.dailyBoardItem} ${task.done ? styles.dailyBoardItemDone : ""} ${isDragging ? styles.dailyBoardItemDragging : ""}`}
                             draggable={!todayBoard.wrapped && dailyEditTaskId !== task.id}
@@ -2142,7 +2207,15 @@ export default function Home() {
                                 <button className={`${styles.priority} ${pClass} ${styles.priorityBtn}`} title="Click to change priority" onClick={e => { e.stopPropagation(); handleUpdatePriority(task.id, task.priority); }}>{task.priority}</button>
                                 {proj && <span className={styles.project}>{proj.name}</span>}
                                 {task.parentTaskId && <span className={styles.parentBadge} title="Has parent task">↳ child</span>}
-                                {task.eta && <span className={styles.eta}>due {task.eta}</span>}
+                                {task.eta && (
+                                  <span
+                                    className={`${styles.eta} ${etaOverdue ? styles.etaOverdue : etaImminent ? styles.etaImminent : ""}`}
+                                    title={etaOverdue ? `Overdue by ${Math.abs(etaDays!)} day(s)` : etaImminent ? `Due in ${etaDays} day(s)` : `Due ${task.eta}`}
+                                  >
+                                    {etaOverdue ? "⚠️ " : etaImminent ? "🔴 " : ""}due {task.eta}
+                                    {etaOverdue ? ` (${Math.abs(etaDays!)}d overdue)` : etaImminent && etaDays === 0 ? " (today!)" : etaImminent ? ` (${etaDays}d left)` : ""}
+                                  </span>
+                                )}
                                 <button
                                   className={`${styles.dailySubCount} ${boardSubExpanded.has(task.id) ? styles.dailySubCountOpen : ""}`}
                                   onClick={e => { e.stopPropagation(); setBoardSubExpanded(prev => { const n = new Set(prev); n.has(task.id) ? n.delete(task.id) : n.add(task.id); return n; }); }}
@@ -2215,6 +2288,15 @@ export default function Home() {
                                   onChange={e => setDailyEditNotes(e.target.value)}
                                   placeholder="Add notes, links, context…"
                                   rows={3}
+                                />
+                              </div>
+                              <div className={styles.dailyEditSection}>
+                                <label className={styles.dailyEditLabel}>Need by date</label>
+                                <input
+                                  type="date"
+                                  className={styles.taskEditInput}
+                                  value={dailyEditEta}
+                                  onChange={e => setDailyEditEta(e.target.value)}
                                 />
                               </div>
                               <div className={styles.dailyEditSection}>
@@ -2975,6 +3057,27 @@ export default function Home() {
               </ul>
 
               {/* Default lock session expiry (applies to locked projects that don't have per-project override) */}
+              <div className={styles.lockSessionRow}>
+                <span className={styles.lockSessionLabel}>📅 ETA warning window</span>
+                <select
+                  className={styles.select}
+                  value={state.settings?.etaWarningDays ?? 3}
+                  onChange={async e => {
+                    if (!state) return;
+                    const days = Number(e.target.value);
+                    await persist({ ...state, settings: { ...(state.settings ?? { jobs: [] }), etaWarningDays: days } });
+                  }}
+                >
+                  <option value={1}>1 day before</option>
+                  <option value={2}>2 days before</option>
+                  <option value={3}>3 days before (default)</option>
+                  <option value={5}>5 days before</option>
+                  <option value={7}>7 days before</option>
+                  <option value={14}>14 days before</option>
+                </select>
+                <span className={styles.lockSessionNote}>Tasks due within this window are highlighted and floated to the top of the board and project lists.</span>
+              </div>
+
               <div className={styles.lockSessionRow}>
                 <span className={styles.lockSessionLabel}>🔒 Default notes-unlock expires after</span>
                 <select
