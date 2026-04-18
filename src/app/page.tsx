@@ -1395,6 +1395,8 @@ export default function Home() {
     return true;
   };
 
+  const etaWarningDays = state.settings?.etaWarningDays ?? 3;
+
   // Top-level = no parentTaskId, exclude archived (tasks in locked projects ARE shown — notes masked)
   const topLevelTasks = state.tasks.filter(t => !t.parentTaskId && !t.archived);
   const taskSearchLower = taskSearch.toLowerCase();
@@ -1669,7 +1671,6 @@ export default function Home() {
   }
   const topics = state.learningTopics ?? [];
   const projects = state.projects ?? [];
-  const etaWarningDays = state.settings?.etaWarningDays ?? 3;
   const todayBoard = state.dailyBoards?.find(b => b.date === todayStr) ?? null;
   const boardTaskObjects = (todayBoard?.taskIds ?? [])
     .map(id => state.tasks.find(t => t.id === id))
