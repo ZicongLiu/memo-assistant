@@ -233,6 +233,7 @@ export default function Home() {
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [newTaskNotes, setNewTaskNotes] = useState("");
   const [newTaskNotesOpen, setNewTaskNotesOpen] = useState(false);
+  const [newTaskEta, setNewTaskEta] = useState("");
   const [newTaskPriority, setNewTaskPriority] = useState<"High" | "Medium" | "Low">("Medium");
   const [newTaskProject, setNewTaskProject] = useState("");
   // Import
@@ -528,11 +529,12 @@ export default function Home() {
       priority: newTaskPriority, category: "Other", done: false,
       createdAt: new Date().toISOString().slice(0, 10),
       projectId: newTaskProject || (state.projects?.[0]?.id ?? "p_default"),
-      subtasks: [], notes: newTaskNotes.trim(), eta: "", tagProjectIds: [], deps: [], recur: null,
+      subtasks: [], notes: newTaskNotes.trim(), eta: newTaskEta, tagProjectIds: [], deps: [], recur: null,
     };
     persist({ ...state, tasks: [task, ...state.tasks] });
     setNewTaskTitle("");
     setNewTaskNotes("");
+    setNewTaskEta("");
     setNewTaskNotesOpen(false);
   }
   function handleToggleDone(taskId: string) {
@@ -1827,15 +1829,28 @@ export default function Home() {
                 <button className={styles.btn} type="submit">Add</button>
                 <button type="button" className={styles.btnOutline} onClick={() => { setImportOpen(o => !o); if (!importProject) setImportProject(newTaskProject); }}>Import</button>
               </div>
-              {newTaskNotesOpen && (
-                <textarea
-                  className={styles.addNotesField}
-                  placeholder="Notes (optional)…"
-                  value={newTaskNotes}
-                  rows={2}
-                  onChange={e => setNewTaskNotes(e.target.value)}
-                />
-              )}
+              <div className={styles.addTaskExtra}>
+                {newTaskNotesOpen && (
+                  <textarea
+                    className={styles.addNotesField}
+                    placeholder="Notes (optional)…"
+                    value={newTaskNotes}
+                    rows={2}
+                    onChange={e => setNewTaskNotes(e.target.value)}
+                  />
+                )}
+                <div className={styles.addEtaRow}>
+                  <label className={styles.addEtaLabel}>Need by</label>
+                  <input
+                    type="date"
+                    className={styles.addEtaInput}
+                    value={newTaskEta}
+                    onChange={e => setNewTaskEta(e.target.value)}
+                    title="Need by date (optional)"
+                  />
+                  {newTaskEta && <button type="button" className={styles.addEtaClear} onClick={() => setNewTaskEta("")}>×</button>}
+                </div>
+              </div>
             </form>
 
             {importOpen && (
