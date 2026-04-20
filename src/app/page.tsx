@@ -281,6 +281,7 @@ export default function Home() {
   const [taskEditTitle, setTaskEditTitle] = useState("");
   const [taskEditNotes, setTaskEditNotes] = useState("");
   const [taskEditEta, setTaskEditEta] = useState("");
+  const [taskEditProject, setTaskEditProject] = useState("");
   const [notesDraft, setNotesDraft] = useState("");
   const [notesExpandedFor, setNotesExpandedFor] = useState<Set<string>>(new Set());
 
@@ -1206,13 +1207,14 @@ export default function Home() {
     setTaskEditTitle(task.title);
     setTaskEditNotes(task.notes ?? "");
     setTaskEditEta(task.eta ?? "");
+    setTaskEditProject(task.projectId ?? "");
     setNotesOpenFor(null); // close standalone notes panel if open
   }
 
   function saveTaskEdit(taskId: string) {
     if (!state || !taskEditTitle.trim()) { setTaskEditOpenFor(null); return; }
     persist({ ...state, tasks: state.tasks.map(t =>
-      t.id === taskId ? { ...t, title: taskEditTitle.trim(), notes: taskEditNotes, eta: taskEditEta } : t
+      t.id === taskId ? { ...t, title: taskEditTitle.trim(), notes: taskEditNotes, eta: taskEditEta, projectId: taskEditProject || t.projectId } : t
     )});
     setTaskEditOpenFor(null);
   }
@@ -1626,6 +1628,17 @@ export default function Home() {
                   onChange={e => setTaskEditEta(e.target.value)}
                   onClick={e => e.stopPropagation()}
                 />
+              </div>
+              <div className={styles.taskEditField}>
+                <label className={styles.taskEditLabel}>Project</label>
+                <select
+                  className={styles.select}
+                  value={taskEditProject}
+                  onChange={e => setTaskEditProject(e.target.value)}
+                  onClick={e => e.stopPropagation()}
+                >
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
               </div>
               <div className={styles.taskEditActions}>
                 <button className={styles.subtaskAddBtn} onClick={e => { e.stopPropagation(); saveTaskEdit(task.id); }}>Save</button>
