@@ -1541,8 +1541,12 @@ export default function Home() {
           return (
             <div
               className={`${styles.notesPreview} ${notesExpandedFor.has(task.id) ? styles.notesPreviewExpanded : ""}`}
-              onClick={e => { e.stopPropagation(); setNotesExpandedFor(prev => { const n = new Set(prev); n.has(task.id) ? n.delete(task.id) : n.add(task.id); return n; }); }}
-              title="Click to expand · Click title to edit"
+              onClick={e => {
+                e.stopPropagation();
+                if (window.getSelection()?.toString()) return;
+                setNotesExpandedFor(prev => { const n = new Set(prev); n.has(task.id) ? n.delete(task.id) : n.add(task.id); return n; });
+              }}
+              title={notesExpandedFor.has(task.id) ? "Click to collapse" : "Click to expand"}
             >
               {notesExpandedFor.has(task.id) ? task.notes : task.notes.split("\n")[0]}
             </div>

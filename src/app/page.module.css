@@ -1658,6 +1658,8 @@
   overflow: visible;
   text-overflow: clip;
   padding-bottom: 8px;
+  user-select: text;
+  cursor: text;
 }
 
 /* ─── Completion panel ───────────────────────────────────────────────────── */
