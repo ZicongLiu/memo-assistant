@@ -823,6 +823,24 @@
   border-radius: 99px;
   border: 1px solid var(--border);
 }
+.projectClickable {
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+.projectClickable:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.inlineProjectSelect {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  padding: 1px 4px;
+  border-radius: 99px;
+  border: 1px solid var(--accent);
+  cursor: pointer;
+  max-width: 120px;
+}
 .eta        { font-size: 0.75rem; color: var(--text-secondary); }
 .etaImminent { font-size: 0.75rem; color: #d97706; font-weight: 600; }
 .etaOverdue  { font-size: 0.75rem; color: #dc2626; font-weight: 700; }

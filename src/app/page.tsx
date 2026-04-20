@@ -282,6 +282,7 @@ export default function Home() {
   const [taskEditNotes, setTaskEditNotes] = useState("");
   const [taskEditEta, setTaskEditEta] = useState("");
   const [taskEditProject, setTaskEditProject] = useState("");
+  const [inlineProjectFor, setInlineProjectFor] = useState<string | null>(null);
   const [notesDraft, setNotesDraft] = useState("");
   const [notesExpandedFor, setNotesExpandedFor] = useState<Set<string>>(new Set());
 
@@ -1458,8 +1459,27 @@ export default function Home() {
             >{task.title}</span>
             <div className={styles.taskMeta}>
               <button className={`${styles.priority} ${priorityClass} ${styles.priorityBtn}`} title="Click to change priority" onClick={e => { e.stopPropagation(); handleUpdatePriority(task.id, task.priority); }}>{task.priority}</button>
-              {projects.find(p => p.id === task.projectId) && (
-                <span className={styles.project}>{projects.find(p => p.id === task.projectId)!.name}</span>
+              {inlineProjectFor === task.id ? (
+                <select
+                  className={styles.inlineProjectSelect}
+                  value={task.projectId}
+                  autoFocus
+                  onChange={e => {
+                    e.stopPropagation();
+                    persist({ ...state!, tasks: state!.tasks.map(t => t.id === task.id ? { ...t, projectId: e.target.value } : t) });
+                    setInlineProjectFor(null);
+                  }}
+                  onBlur={() => setInlineProjectFor(null)}
+                  onClick={e => e.stopPropagation()}
+                >
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              ) : (
+                <span
+                  className={`${styles.project} ${styles.projectClickable}`}
+                  onClick={e => { e.stopPropagation(); setInlineProjectFor(task.id); }}
+                  title="Click to change project"
+                >{projects.find(p => p.id === task.projectId)?.name ?? ""}</span>
               )}
               {task.eta && (() => {
                 const d = daysUntilEta(task.eta, todayStr);
@@ -1628,17 +1648,6 @@ export default function Home() {
                   onChange={e => setTaskEditEta(e.target.value)}
                   onClick={e => e.stopPropagation()}
                 />
-              </div>
-              <div className={styles.taskEditField}>
-                <label className={styles.taskEditLabel}>Project</label>
-                <select
-                  className={styles.select}
-                  value={taskEditProject}
-                  onChange={e => setTaskEditProject(e.target.value)}
-                  onClick={e => e.stopPropagation()}
-                >
-                  {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                </select>
               </div>
               <div className={styles.taskEditActions}>
                 <button className={styles.subtaskAddBtn} onClick={e => { e.stopPropagation(); saveTaskEdit(task.id); }}>Save</button>
