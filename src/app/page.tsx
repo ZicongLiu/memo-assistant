@@ -1033,18 +1033,15 @@ export default function Home() {
 
   // ── Daily board ───────────────────────────────────────────────────────────────
 
-  function getDefaultBoardSelection(tasks: Task[], boards: DailyBoard[], projects: Project[]): Set<string> {
+  function getDefaultBoardSelection(tasks: Task[], boards: DailyBoard[]): Set<string> {
     const prevBoard = [...boards]
       .filter(b => b.date < todayStr)
       .sort((a, b) => b.date.localeCompare(a.date))[0];
     const prevBoardIds = new Set(prevBoard?.taskIds ?? []);
-    // Default view is the Memo project — only pre-select tasks visible there
-    const memoId = projects.find(p => p.name === "Memo")?.id ?? null;
+    // Pre-select ALL incomplete tasks from the previous board, regardless of project
     return new Set(
       tasks
-        .filter(t => !t.done
-          && (memoId ? t.projectId === memoId : true)
-          && prevBoardIds.has(t.id))
+        .filter(t => !t.done && !t.archived && prevBoardIds.has(t.id))
         .map(t => t.id)
     );
   }
@@ -1059,7 +1056,12 @@ export default function Home() {
     }
     if (setupAutoSelectDone.current) return;
     setupAutoSelectDone.current = true;
-    setDailySetupSelected(getDefaultBoardSelection(state.tasks, state.dailyBoards ?? [], state.projects));
+    const carried = getDefaultBoardSelection(state.tasks, state.dailyBoards ?? []);
+    setDailySetupSelected(carried);
+    if (carried.size > 0) {
+      // Show all projects so no carried task is hidden behind a project filter
+      setDailySetupProjectId("all");
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, dailyAddingMore, dailyShowSetup]);
 
@@ -1721,7 +1723,18 @@ export default function Home() {
     }
   }
   const prio = { High: 3, Medium: 2, Low: 1 } as Record<string, number>;
-  const isSetupSuggested = (t: Task) => t.priority === "High" || (t.dailyRank ?? 0) > 0 || isEtaImminent(t, todayStr, etaWarningDays);
+  // Compute which tasks are carried over from the most recent previous board
+  const prevSetupBoard = [...(state.dailyBoards ?? [])]
+    .filter(b => b.date < todayStr)
+    .sort((a, b) => b.date.localeCompare(a.date))[0];
+  const prevBoardIncompleteIds = new Set(
+    (prevSetupBoard?.taskIds ?? []).filter(id => {
+      const t = state.tasks.find(t => t.id === id);
+      return t && !t.done && !t.archived;
+    })
+  );
+  const isSetupSuggested = (t: Task) =>
+    t.priority === "High" || (t.dailyRank ?? 0) > 0 || isEtaImminent(t, todayStr, etaWarningDays) || prevBoardIncompleteIds.has(t.id);
   const setupSearchLower = dailySetupSearch.toLowerCase();
   const matchesSetupSearch = (t: Task) =>
     !dailySetupSearch || t.title.toLowerCase().includes(setupSearchLower) || (t.notes ?? "").toLowerCase().includes(setupSearchLower);
@@ -2085,6 +2098,7 @@ export default function Home() {
                             <span className={styles.dailySetupTaskTitle}>{task.title}</span>
                             {proj && <span className={styles.dailySetupTaskProj}>{proj.name}</span>}
                           </div>
+                          {prevBoardIncompleteIds.has(task.id) && <span className={styles.carriedBadge} title={`Unfinished from ${prevSetupBoard?.date}`}>↩</span>}
                           {(task.dailyRank ?? 0) > 0 && <span className={styles.boostBadge}>↑{task.dailyRank}</span>}
                         </div>
                         {children.map(child => {
